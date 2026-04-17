@@ -46,6 +46,8 @@ Fizyczne terminale POS w prawdziwym świecie komunikują się za pomocą protoko
 
 **Płatności internetowe** (e-commerce) działają natomiast przez standardowe REST API z JSON-em – czyli dokładnie ten sam mechanizm, którego używamy do budowy całej aplikacji. Od strony logiki biznesowej (autoryzacja, routing BIN, clearing) są **identyczne** z płatnościami terminalowymi, co oznacza, że projekt jest edukacyjnie pełnowartościowy i realistyczny.
 
+**Płatności internetowe i fizyczne - Fizyczne Nie http ale możemy trochę uprościć ten ISO 8583 - Czy możemy to zrobić na socketach, np 8 pól zamiast 128**
+
 > ⚠️ **Do ustalenia z prowadzącym:** Czy skupiamy się wyłącznie na płatnościach internetowych (klient wpisuje dane karty na stronie), czy jednak implementujemy też symulację terminala POS jako dodatkowy interfejs wejściowy? (patrz [Pytania do ustalenia](#pytania-do-ustalenia-z-prowadzącym))
 
 ---
@@ -483,34 +485,15 @@ Historia transakcji danej karty.
 
 ---
 
-## Scenariusze wydawania kart
+## Wydawanie kart
 
-> ⚠️ **DO USTALENIA Z PROWADZĄCYM**
-
-### Scenariusz A – Karty wydawane wyłącznie z naszego panelu *(rekomendowany jako baza)*
-
-Klient banku loguje się do **naszego panelu** i samodzielnie generuje kartę, podając swoje `account_id` z banku.
-
-```
-Klient → [Nasz Panel] → POST /api/v1/cards/issue → [Nasza Baza]
-```
-
-- ✅ Prosta implementacja, brak zależności od gotowości innych zespołów
-- ✅ Można działać i prezentować bez żadnego innego modułu
-- ❌ Mniej realistyczne – w prawdziwym świecie to bank inicjuje wydanie
-
-### Scenariusz B – Karty wydawane przez banki na żądanie *(bardziej realistyczny)*
+### Karty wydawane przez banki na żądanie 
 
 Gdy bank tworzy konto dla klienta, **bank** wywołuje nasz endpoint i zleca wydanie karty.
 
 ```
 [Bank A tworzy konto] → POST /api/v1/cards/issue → [Nasz Moduł] → token karty → [Bank A]
 ```
-
-- ✅ Zgodne z rzeczywistością
-- ❌ Uzależnienie od postępu innych zespołów
-
-> 💡 **Sugestia:** Zaimplementuj Scenariusz A jako podstawę, Scenariusz B jako opcję.
 
 ---
 
@@ -687,27 +670,18 @@ Czy skupiamy się wyłącznie na płatnościach internetowych (klient wpisuje da
 **2. Etap Clearing/Settlement**
 Czy implementujemy Settlement jako osobny etap asynchroniczny (zmiana statusu `CAPTURED → SETTLED` wyzwalana harmonogramem, np. co noc), czy upraszczamy do automatycznej zmiany statusu zaraz po Capture?
 
-**3. Autoryzacja 3D Secure (3DS)**
+**3. Autoryzacja 3D Secure (3DS) - Bez autoryzacji**
 W prawdziwym e-commerce transakcje kartą wymagają dodatkowej weryfikacji tożsamości (kod SMS / push z aplikacji bankowej – to właśnie 3D Secure). Czy implementujemy ten etap choćby w uproszczonej formie (np. dodatkowe pole `otp_code` w żądaniu weryfikowane przez bank), czy całkowicie go pomijamy?
 
 **4. Częściowe zwroty**
-Czy zwrot musi zawsze dotyczyć pełnej kwoty transakcji, czy implementujemy też zwroty częściowe (np. 50 PLN z transakcji na 150 PLN)?
+Czy zwrot musi zawsze dotyczyć pełnej kwoty transakcji, czy implementujemy też zwroty częściowe (np. 50 PLN z transakcji na 150 PLN)? - 
 
 **5. Limity transakcyjne**
-Czy limity (dzienny, per transakcja) są zarządzane po naszej stronie (w CMS), czy każdy bank-wydawca zarządza limitami samodzielnie i to on odpowiada `DECLINED – LIMIT_EXCEEDED`? A może oba poziomy?
-
-**6. Historia transakcji dla klienta**
-Czy klient (użytkownik banku) ma dostęp do podglądu swoich transakcji kartowych przez nasz moduł, czy historia transakcji jest widoczna wyłącznie w panelu danego banku?
+Czy limity (dzienny, per transakcja) są zarządzane po naszej stronie (w CMS), czy każdy bank-wydawca zarządza limitami samodzielnie i to on odpowiada `DECLINED – LIMIT_EXCEEDED`? - Sprawdzić jak jest irl i tak zrobić.
 
 ---
 
 ### Architektura i integracja
-
-**7. Wydawanie kart – kto inicjuje?**
-Czy karta jest wydawana wyłącznie z naszego panelu przez klienta (Scenariusz A – prostszy), czy bank wywołuje nasz endpoint przy tworzeniu konta klienta (Scenariusz B – realistyczniejszy)? A może oba?
-
-**8. Nasz moduł jako jedyny procesor**
-Czy nasz moduł jest jedynym procesorem kart dla wszystkich banków w projekcie, czy każdy bank może obsługiwać płatności kartowe samodzielnie? Innymi słowy – czy płatność kartą Banku Euro A zawsze przechodzi przez nasz moduł?
 
 **9. Wspólny standard identyfikatorów**
 Czy w całym projekcie przyjmujemy jeden format `user_id` i `account_id` (np. UUID v4)? Który moduł jest „właścicielem" tych identyfikatorów?
@@ -717,19 +691,17 @@ Czy autoryzacja ma być zawsze synchroniczna (REST, odpowiedź natychmiast), a S
 
 **11. Autentykacja między modułami**
 Jak moduły uwierzytelniają się wzajemnie? Wspólne tokeny API (`X-API-Key`), JWT, mTLS, czy zakładamy, że ruch jest w bezpiecznej sieci wewnętrznej bez autentykacji?
+Wspólne tokeny 
 
 ---
 
 ### Sieć kart i waluty
 
-**12. Jeden procesor kart bez podziału na sieci**
-Potwierdzamy brak podziału na Visa/Mastercard – wszystkie karty w projekcie obsługuje jeden wewnętrzny procesor (nasz moduł).
-
 **13. Przewalutowanie (FX)**
-Czy obsługujemy płatność kartą PLN w sklepie rozliczanym w EUR? Kto wykonuje przewalutowanie – nasz moduł, bank-wydawca, czy upraszczamy do założenia, że karta może płacić tylko w walucie swojego banku?
+Czy obsługujemy płatność kartą PLN w sklepie rozliczanym w EUR? My rozliczamy w walucie w jakiej odbieramy.
 
 **14. Waluty kart zagranicznych**
-Karta Banku Brytyjskiego A jest w GBP. Jeśli właściciel tej karty zapłaci w PLN – jak to rozliczamy? Czy zakładamy, że płatności międzywalutowe są poza zakresem projektu?
+Karta Banku Brytyjskiego A jest w GBP. Jeśli właściciel tej karty zapłaci w PLN – jak to rozliczamy? - Karta w walucie taka jak waluta w kraju 
 
 ---
 
@@ -737,6 +709,7 @@ Karta Banku Brytyjskiego A jest w GBP. Jeśli właściciel tej karty zapłaci w 
 
 **15. Poziom zgodności z PCI-DSS**
 PCI-DSS to standard bezpieczeństwa dla systemów kartowych (zakaz przechowywania CVV, maskowanie PAN, szyfrowanie transmisji). Czy chcemy formalnie wskazać, które wymagania PCI-DSS symulujemy, a które świadomie pomijamy jako poza zakresem?
+Nie obchodzi nas
 
 **16. Tokenizacja – własna implementacja**
 Czy implementujemy własną tokenizację PAN (UUID v4 lub HMAC-SHA256 + salt), czy korzystamy z gotowej biblioteki? Jaki poziom bezpieczeństwa jest wymagany?
@@ -746,10 +719,22 @@ Czy implementujemy własną tokenizację PAN (UUID v4 lub HMAC-SHA256 + salt), c
 ### Wymagania projektowe
 
 **17. Panel administratora – frontend**
-Czy panel admina ma być osobną aplikacją frontendową (React, Vue itp.), czy wystarczy prosty interfejs (Swagger UI + kilka stron HTML/Thymeleaf)?
+Czy panel admina ma być osobną aplikacją frontendową - Panel dla sklepu
 
 **18. Dokumentacja API**
 Czy wymagana jest dokumentacja OpenAPI/Swagger? Czy inne zespoły mają obowiązek dostarczenia Swaggera dla endpointów, z których my korzystamy?
 
 ---
 
+
+Symulacja aby co 10 minut się synchronizował - konfigurowalne
+
+Sprawdzić jak są rozdzielane prowizje i w jaki sposób ta prowizja później idzie do banków
+
+Jak wygląda przewalutowanie płatności kartą
+
+Częściowe zwroty odpuszczamy 
+
+Bankomatów nie robimy wogóle
+
+VisaNet 
