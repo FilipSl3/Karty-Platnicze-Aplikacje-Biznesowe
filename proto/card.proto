@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package cardprovider;
+
+service CardProvider {
+    rpc AuthorizeTransaction (AuthorizationRequest) returns (AuthorizationResponse);
+    rpc SettleTransaction (SettlementRequest) returns (SettlementResponse);
+    rpc CreateCard (CreateCardRequest) returns (CreateCardResponse);
+    rpc GetCardStatus (GetCardRequest) returns (CardDetails);
+}
+
+message AuthorizationRequest {
+    string card_token = 1;
+    double amount = 2;
+    string currency = 3;
+    string merchant_id = 4;
+    string pin_block = 5;
+}
+
+message AuthorizationResponse {
+    enum ResponseCode {
+        APPROVED = 0;
+        DECLINED = 1;
+        CARD_BLOCKED = 2;
+    }
+    string authorization_code = 1;
+    ResponseCode response_code = 2;
+    string message = 3;
+}
+
+message SettlementRequest {
+    string authorization_code = 1;
+    double amount = 2;
+}
+
+message SettlementResponse {
+    bool success = 1;
+    string transaction_id = 2;
+}
+
+message CreateCardRequest {
+    string user_id = 1;
+    string account_id = 2;
+    string card_type = 3;
+}
+
+message CreateCardResponse {
+    string card_token = 1;
+    string masked_pan = 2;
+}
+
+message GetCardRequest {
+    string card_token = 1;
+}
+
+message CardDetails {
+    string status = 1;
+    double balance = 2;
+}

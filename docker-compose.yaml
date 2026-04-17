@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Baza Danych
+  postgres-db:
+    image: postgres:16-alpine
+    container_name: bank_postgres
+    environment:
+      POSTGRES_USER: bank_user
+      POSTGRES_PASSWORD: bank_pass
+      POSTGRES_DB: cards_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bank_user -d cards_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Mikroserwis 1: Card Provider (Issuer)
+  card-provider:
+    build:
+      context: ./card-provider-service
+      dockerfile: Dockerfile
+    container_name: card_provider_app
+    ports:
+      - "50051:50051"  # Port gRPC
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://bank_user:bank_pass@postgres-db/cards_db"
+      GRPC_PORT: 50051
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+
+  # Mikroserwis 2: Payment Gateway (Acquirer/Terminal)
+  payment-gateway:
+    build:
+      context: ./payment-gateway-service
+      dockerfile: Dockerfile
+    container_name: payment_gateway_app
+    ports:
+      - "8000:8000"   # Port REST API (Swagger/Terminal)
+    environment:
+      GRPC_SERVER_URL: "card-provider:50051"
+    depends_on:
+      - card-provider
+
+volumes:
+  postgres_data:
