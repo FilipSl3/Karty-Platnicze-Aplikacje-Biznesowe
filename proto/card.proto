@@ -3,18 +3,77 @@ syntax = "proto3";
 package cardprovider;
 
 service CardProvider {
-    rpc AuthorizeTransaction (AuthorizationRequest) returns (AuthorizationResponse);
-    rpc SettleTransaction (SettlementRequest) returns (SettlementResponse);
+    // Wydawanie kart
     rpc CreateCard (CreateCardRequest) returns (CreateCardResponse);
     rpc GetCardStatus (GetCardRequest) returns (CardDetails);
+
+    // Zarządzanie kartą
+    rpc BlockCard (BlockCardRequest) returns (BlockCardResponse);
+    rpc UnblockCard (UnblockCardRequest) returns (UnblockCardResponse);
+
+    // Autoryzacja i rozliczenia
+    rpc AuthorizeTransaction (AuthorizationRequest) returns (AuthorizationResponse);
+    rpc SettleTransaction (SettlementRequest) returns (SettlementResponse);
+
+    // Chargeback
+    rpc InitiateChargeback (ChargebackRequest) returns (ChargebackResponse);
 }
+
+// --- Karty ---
+
+message CreateCardRequest {
+    string user_id = 1;
+    string account_id = 2;
+    string card_type = 3;  // "VIRTUAL" | "PHYSICAL" | "PREPAID"
+    float initial_balance = 4;  // tylko dla PREPAID
+}
+
+message CreateCardResponse {
+    string card_token = 1;
+    string masked_pan = 2;
+    string status = 3;
+    string card_type = 4;
+}
+
+message GetCardRequest {
+    string card_token = 1;
+}
+
+message CardDetails {
+    string card_token = 1;
+    string status = 2;
+    string card_type = 3;
+    float balance = 4;
+    float daily_limit = 5;
+}
+
+message BlockCardRequest {
+    string card_token = 1;
+    string reason = 2;
+}
+
+message BlockCardResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message UnblockCardRequest {
+    string card_token = 1;
+}
+
+message UnblockCardResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// --- Transakcje ---
 
 message AuthorizationRequest {
     string card_token = 1;
     double amount = 2;
     string currency = 3;
     string merchant_id = 4;
-    string pin_block = 5;
+    string merchant_name = 5;
 }
 
 message AuthorizationResponse {
@@ -22,10 +81,14 @@ message AuthorizationResponse {
         APPROVED = 0;
         DECLINED = 1;
         CARD_BLOCKED = 2;
+        INSUFFICIENT_FUNDS = 3;
+        CARD_EXPIRED = 4;
+        LIMIT_EXCEEDED = 5;
     }
     string authorization_code = 1;
     ResponseCode response_code = 2;
     string message = 3;
+    string transaction_id = 4;
 }
 
 message SettlementRequest {
@@ -36,24 +99,19 @@ message SettlementRequest {
 message SettlementResponse {
     bool success = 1;
     string transaction_id = 2;
+    string status = 3;
 }
 
-message CreateCardRequest {
-    string user_id = 1;
-    string account_id = 2;
-    string card_type = 3;
+// --- Chargeback ---
+
+message ChargebackRequest {
+    string transaction_id = 1;
+    string reason = 2;
+    string initiated_by = 3;
 }
 
-message CreateCardResponse {
-    string card_token = 1;
-    string masked_pan = 2;
-}
-
-message GetCardRequest {
-    string card_token = 1;
-}
-
-message CardDetails {
-    string status = 1;
-    double balance = 2;
+message ChargebackResponse {
+    bool success = 1;
+    string chargeback_id = 2;
+    string status = 3;
 }
