@@ -193,6 +193,70 @@ docker-compose up --build
 
 ---
 
+## Schemat bazy danych
+
+```mermaid
+erDiagram
+    CARDS {
+        UUID id PK
+        string user_id
+        string account_id
+        string token UK
+        string masked_pan
+        string card_type
+        string status
+        decimal balance
+        decimal daily_limit
+        timestamp created_at
+        timestamp activated_at
+    }
+
+    TRANSACTIONS {
+        UUID id PK
+        UUID card_id FK
+        string merchant_id
+        string merchant_name
+        decimal amount
+        string currency
+        string status
+        string authorization_code UK
+        timestamp created_at
+        timestamp settled_at
+    }
+
+    TRANSACTION_FEES {
+        UUID id PK
+        UUID transaction_id FK
+        decimal interchange_fee
+        decimal scheme_fee
+        decimal acquirer_fee
+        decimal total_fee
+    }
+
+    CARD_STATUS_HISTORY {
+        UUID id PK
+        UUID card_id FK
+        string old_status
+        string new_status
+        string changed_by
+        timestamp changed_at
+    }
+
+    CHARGEBACKS {
+        UUID id PK
+        UUID transaction_id FK
+        string status
+        string reason
+        string initiated_by
+        timestamp created_at
+    }
+
+    CARDS ||--o{ TRANSACTIONS : "has"
+    TRANSACTIONS ||--o| TRANSACTION_FEES : "has"
+    TRANSACTIONS ||--o| CHARGEBACKS : "has"
+    CARDS ||--o{ CARD_STATUS_HISTORY : "has"
+```
+
 ## Plan rozwoju
 
 ### Etap 1 (3.0)
