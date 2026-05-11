@@ -178,14 +178,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             return card_pb2.UnblockCardResponse(success=True, message="Card unblocked")
 
 
-async def init_db():
-    """Tworzy tabele jeśli nie istnieją (backup dla Alembic)"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
 async def serve():
-    await init_db()
     server = aio.server()
     card_pb2_grpc.add_CardProviderServicer_to_server(CardProviderServicer(), server)
     server.add_insecure_port('[::]:50051')
