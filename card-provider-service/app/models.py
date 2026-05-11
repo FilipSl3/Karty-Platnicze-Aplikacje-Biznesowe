@@ -6,14 +6,13 @@ from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 class CardStatus(str, enum.Enum):
-    ACTIVE = "ACTIVE"
-    BLOCKED = "BLOCKED"
-    EXPIRED = "EXPIRED"
-    CANCELLED = "CANCELLED"
-    ORDERED = "ORDERED"
-    IN_PRODUCTION = "IN_PRODUCTION"
-    IN_TRANSIT = "IN_TRANSIT"
-    DELIVERED = "DELIVERED"
+    REQUESTED  = "REQUESTED"
+    PRODUCING  = "PRODUCING"
+    SHIPPED    = "SHIPPED"
+    ACTIVE     = "ACTIVE"
+    BLOCKED    = "BLOCKED"
+    EXPIRED    = "EXPIRED"
+    CANCELLED  = "CANCELLED"
 
 class CardType(str, enum.Enum):
     VIRTUAL = "VIRTUAL"
