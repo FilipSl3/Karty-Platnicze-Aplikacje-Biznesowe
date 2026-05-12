@@ -3,182 +3,327 @@ import asyncio
 import logging
 import uuid
 import secrets
-from datetime import datetime, timedelta
+import os
+import grpc
+from datetime import datetime
 from grpc import aio
 from sqlalchemy import select
 
 from app import card_pb2_grpc
 import app.card_pb2 as card_pb2
-from app.database import AsyncSessionLocal, engine, Base
-from app.models import Card, CardType, CardStatus, CardStatusHistory
+from app.database import AsyncSessionLocal, engine, Base, BANK_API_KEYS_SEED
+from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Czas aktywacji karty wirtualnej
+VIRTUAL_CARD_ACTIVATION_DELAY = int(os.getenv("VIRTUAL_CARD_ACTIVATION_DELAY", "3600"))
+
+# Maszyna stanów – dozwolone przejścia
+ALLOWED_TRANSITIONS = {
+    CardStatus.REQUESTED: [CardStatus.PRODUCING],
+    CardStatus.PRODUCING: [CardStatus.SHIPPED],
+    CardStatus.SHIPPED:   [CardStatus.ACTIVE, CardStatus.BLOCKED],
+    CardStatus.ACTIVE:    [CardStatus.BLOCKED],
+    CardStatus.BLOCKED:   [CardStatus.ACTIVE],
+}
+
 
 def generate_token() -> str:
-    """Generuje unikalny token karty"""
     return f"tok_{secrets.token_hex(16)}"
 
 
-def generate_masked_pan(card_type: str) -> str:
-    """Generuje zamaskowany numer karty z prefiksem BIN"""
-    bin_map = {
-        "VIRTUAL":  "4100",
-        "PHYSICAL": "4200",
-        "PREPAID":  "4300",
-    }
-    prefix = bin_map.get(card_type, "4000")
-    middle = secrets.randbelow(99999999)
+def generate_masked_pan(bin_prefix: str) -> str:
     last4 = secrets.randbelow(9999)
-    return f"{prefix} **** **** {last4:04d}"
+    return f"{bin_prefix} **** **** {last4:04d}"
 
 
-async def activate_virtual_card_after_delay(card_id: str):
-    """Aktywuje kartę wirtualną po 1 godzinie"""
-    await asyncio.sleep(3600)
+async def auto_activate_virtual_card(card_id: str, delay: int):
+    """
+    Automatyczna aktywacja karty wirtualnej po określonym czasie.
+    W produkcji: 3600s (1h). W dev: 10s (zmienna VIRTUAL_CARD_ACTIVATION_DELAY).
+    """
+    logger.info(f"Virtual card {card_id} will auto-activate in {delay}s")
+    await asyncio.sleep(delay)
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Card).where(Card.id == uuid.UUID(card_id)))
         card = result.scalar_one_or_none()
-        if card and card.status == CardStatus.ACTIVE:
+        if card and card.status == CardStatus.REQUESTED:
+            card.status = CardStatus.ACTIVE
             card.activated_at = datetime.utcnow()
+            db.add(CardStatusHistory(
+                card_id=card.id,
+                old_status=CardStatus.REQUESTED.value,
+                new_status=CardStatus.ACTIVE.value,
+                changed_by="system_auto_activation",
+            ))
             await db.commit()
-            logger.info(f"Virtual card {card_id} activated after 1h")
+            logger.info(f"Virtual card {card_id} auto-activated after {delay}s")
 
+async def get_bank_by_api_key(db, api_key: str) -> BankApiKey | None:
+    result = await db.execute(
+        select(BankApiKey).where(
+            BankApiKey.api_key == api_key,
+            BankApiKey.is_active == True
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def seed_bank_api_keys():
+    """Wstawia predefiniowane klucze API banków jeśli nie istnieją."""
+    async with AsyncSessionLocal() as db:
+        for seed in BANK_API_KEYS_SEED:
+            existing = await db.execute(
+                select(BankApiKey).where(BankApiKey.bank_id == seed["bank_id"])
+            )
+            if not existing.scalar_one_or_none():
+                db.add(BankApiKey(**seed))
+                logger.info(f"Seeded API key for {seed['bank_id']}")
+        await db.commit()
 
 class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
 
     async def CreateCard(self, request, context):
-        logger.info(f"CreateCard request: user={request.user_id} type={request.card_type}")
+        """
+        Tworzy nową kartę płatniczą.
+
+        Logika per typ:
+        - VIRTUAL:  startuje jako REQUESTED, automatycznie aktywuje się po max 1h
+        - PHYSICAL: startuje jako REQUESTED, wymaga ręcznego przejścia przez cykl
+        - PREPAID:  startuje jako REQUESTED, wymaga ręcznego przejścia przez cykl,
+                    posiada własne saldo (initial_balance)
+        """
+        logger.info(f"CreateCard: user={request.user_id} type={request.card_type}")
+
+        if request.card_type not in ("VIRTUAL", "PHYSICAL", "PREPAID"):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Unknown card_type: {request.card_type}")
+            return
+
 
         async with AsyncSessionLocal() as db:
-            if request.card_type == "PHYSICAL":
-                initial_status = CardStatus.ORDERED
-                activated_at = None
-            elif request.card_type == "VIRTUAL":
-                initial_status = CardStatus.ACTIVE
-                activated_at = datetime.utcnow()
-            elif request.card_type == "PREPAID":
-                initial_status = CardStatus.ACTIVE
-                activated_at = datetime.utcnow()
-            else:
-                initial_status = CardStatus.ACTIVE
-                activated_at = datetime.utcnow()
+            # Weryfikacja klucza API banku
+            bank = await get_bank_by_api_key(db, request.api_key)
+            if not bank:
+                await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Invalid or inactive bank API key")
+                return
+
 
             card = Card(
                 id=uuid.uuid4(),
                 user_id=request.user_id,
                 account_id=request.account_id,
+                bank_id=bank.bank_id,
                 token=generate_token(),
-                masked_pan=generate_masked_pan(request.card_type),
+                masked_pan=generate_masked_pan(bank.bin_prefix),
                 card_type=CardType(request.card_type),
-                status=initial_status,
+                status=CardStatus.REQUESTED,
                 balance=float(request.initial_balance) if request.card_type == "PREPAID" else 0,
                 daily_limit=1000.00,
                 created_at=datetime.utcnow(),
-                activated_at=activated_at,
+                activated_at=None,
             )
             db.add(card)
-
-            history = CardStatusHistory(
+            db.add(CardStatusHistory(
                 card_id=card.id,
                 old_status=None,
-                new_status=initial_status.value,
+                new_status=CardStatus.REQUESTED.value,
                 changed_by="system",
-            )
-            db.add(history)
-
+            ))
             await db.commit()
             await db.refresh(card)
 
-            logger.info(f"Card created: token={card.token} status={card.status}")
+            # Karta wirtualna: automatyczna aktywacja
+            if request.card_type == "VIRTUAL":
+                asyncio.create_task(
+                    auto_activate_virtual_card(str(card.id), VIRTUAL_CARD_ACTIVATION_DELAY)
+                )
+                logger.info(f"Virtual card scheduled for auto-activation in {VIRTUAL_CARD_ACTIVATION_DELAY}s")
 
-            # Dla wirtualnej: zaplanuj aktywację po 1h (już jest aktywna, ale zapisz czas)
-            # Jeśli chcesz żeby wirtualna startowała jako PENDING i aktywowała się po 1h,
-            # odkomentuj poniższe i zmień initial_status dla VIRTUAL na ORDERED
-            # asyncio.create_task(activate_virtual_card_after_delay(str(card.id)))
+            logger.info(f"Card created: token={card.token} type={card.card_type} status={card.status}")
 
             return card_pb2.CreateCardResponse(
                 card_token=card.token,
                 masked_pan=card.masked_pan,
                 status=card.status.value,
                 card_type=card.card_type.value,
+                bank_id=bank.bank_id,
             )
 
     async def GetCardStatus(self, request, context):
-        logger.info(f"GetCardStatus: token={request.card_token}")
-
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Card).where(Card.token == request.card_token)
-            )
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
             card = result.scalar_one_or_none()
-
             if not card:
-                await context.abort(aio.StatusCode.NOT_FOUND, "Card not found")
-
+                await context.abort(grpc.StatusCode.NOT_FOUND, "Card not found")
+                return
             return card_pb2.CardDetails(
                 card_token=card.token,
                 status=card.status.value,
                 card_type=card.card_type.value,
                 balance=float(card.balance),
                 daily_limit=float(card.daily_limit),
+                masked_pan=card.masked_pan,
+                bank_id=card.bank_id,
+            )
+
+    async def ListCards(self, request, context):
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Card))
+            cards = result.scalars().all()
+            return card_pb2.ListCardsResponse(cards=[
+                card_pb2.CardDetails(
+                    card_token=c.token,
+                    status=c.status.value,
+                    card_type=c.card_type.value,
+                    balance=float(c.balance),
+                    daily_limit=float(c.daily_limit),
+                    masked_pan=c.masked_pan,
+                    bank_id=c.bank_id,
+                ) for c in cards
+            ])
+
+    async def UpdateCardStatus(self, request, context):
+        """
+        Przesuwa kartę przez cykl życia (dla operatora banku).
+        Dozwolone przejścia: REQUESTED→PRODUCING→SHIPPED
+        """
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
+            card = result.scalar_one_or_none()
+            if not card:
+                return card_pb2.UpdateCardStatusResponse(
+                    success=False, message="Card not found", current_status=""
+                )
+            try:
+                new_status = CardStatus(request.new_status)
+            except ValueError:
+                return card_pb2.UpdateCardStatusResponse(
+                    success=False,
+                    message=f"Unknown status: {request.new_status}",
+                    current_status=card.status.value
+                )
+            allowed = ALLOWED_TRANSITIONS.get(card.status, [])
+            if new_status not in allowed:
+                return card_pb2.UpdateCardStatusResponse(
+                    success=False,
+                    message=f"Transition {card.status.value} -> {new_status.value} not allowed. Allowed: {[s.value for s in allowed]}",
+                    current_status=card.status.value
+                )
+            old_status = card.status.value
+            card.status = new_status
+            db.add(CardStatusHistory(
+                card_id=card.id,
+                old_status=old_status,
+                new_status=new_status.value,
+                changed_by=request.changed_by or "bank_operator",
+            ))
+            await db.commit()
+            logger.info(f"Card {card.token}: {old_status} -> {new_status.value}")
+            return card_pb2.UpdateCardStatusResponse(
+                success=True,
+                message=f"Status updated: {old_status} -> {new_status.value}",
+                current_status=new_status.value
+            )
+
+    async def ActivateCard(self, request, context):
+        """
+        Aktywuje kartę fizyczną/prepaid (symulacja aktywacji przez klienta w aplikacji banku).
+        Karta musi być w statusie SHIPPED.
+        """
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
+            card = result.scalar_one_or_none()
+            if not card:
+                return card_pb2.ActivateCardResponse(success=False, message="Card not found")
+            if card.status != CardStatus.SHIPPED:
+                return card_pb2.ActivateCardResponse(
+                    success=False,
+                    message=f"Cannot activate. Status is {card.status.value}, must be SHIPPED"
+                )
+            card.status = CardStatus.ACTIVE
+            card.activated_at = datetime.utcnow()
+            db.add(CardStatusHistory(
+                card_id=card.id,
+                old_status=CardStatus.SHIPPED.value,
+                new_status=CardStatus.ACTIVE.value,
+                changed_by=request.activated_by or "customer",
+            ))
+            await db.commit()
+            return card_pb2.ActivateCardResponse(
+                success=True, message="Card activated successfully. Ready for payments."
+            )
+
+    async def TopUpPrepaid(self, request, context):
+        """
+        Doładowanie karty prepaid. Tylko dla kart typu PREPAID w statusie ACTIVE.
+        """
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
+            card = result.scalar_one_or_none()
+            if not card:
+                return card_pb2.TopUpResponse(success=False, message="Card not found", new_balance=0)
+            if card.card_type != CardType.PREPAID:
+                return card_pb2.TopUpResponse(
+                    success=False, message="Only PREPAID cards can be topped up", new_balance=float(card.balance)
+                )
+            if card.status != CardStatus.ACTIVE:
+                return card_pb2.TopUpResponse(
+                    success=False, message=f"Card is {card.status.value}, must be ACTIVE", new_balance=float(card.balance)
+                )
+            if request.amount <= 0:
+                return card_pb2.TopUpResponse(
+                    success=False, message="Amount must be positive", new_balance=float(card.balance)
+                )
+            card.balance = float(card.balance) + request.amount
+            await db.commit()
+            logger.info(f"Prepaid card {card.token} topped up by {request.amount}. New balance: {card.balance}")
+            return card_pb2.TopUpResponse(
+                success=True,
+                message=f"Top-up successful. Added {request.amount} {request.currency}",
+                new_balance=float(card.balance)
             )
 
     async def BlockCard(self, request, context):
-        logger.info(f"BlockCard: token={request.card_token}")
-
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Card).where(Card.token == request.card_token)
-            )
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
             card = result.scalar_one_or_none()
-
             if not card:
                 return card_pb2.BlockCardResponse(success=False, message="Card not found")
-
             old_status = card.status.value
             card.status = CardStatus.BLOCKED
-
-            history = CardStatusHistory(
+            db.add(CardStatusHistory(
                 card_id=card.id,
                 old_status=old_status,
                 new_status=CardStatus.BLOCKED.value,
                 changed_by=request.reason or "admin",
-            )
-            db.add(history)
+            ))
             await db.commit()
-
             return card_pb2.BlockCardResponse(success=True, message="Card blocked")
 
     async def UnblockCard(self, request, context):
-        logger.info(f"UnblockCard: token={request.card_token}")
-
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Card).where(Card.token == request.card_token)
-            )
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
             card = result.scalar_one_or_none()
-
             if not card:
                 return card_pb2.UnblockCardResponse(success=False, message="Card not found")
-
             old_status = card.status.value
             card.status = CardStatus.ACTIVE
-
-            history = CardStatusHistory(
+            db.add(CardStatusHistory(
                 card_id=card.id,
                 old_status=old_status,
                 new_status=CardStatus.ACTIVE.value,
                 changed_by="admin",
-            )
-            db.add(history)
+            ))
             await db.commit()
-
             return card_pb2.UnblockCardResponse(success=True, message="Card unblocked")
 
 
 async def serve():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await seed_bank_api_keys()
     server = aio.server()
     card_pb2_grpc.add_CardProviderServicer_to_server(CardProviderServicer(), server)
     server.add_insecure_port('[::]:50051')
