@@ -30,6 +30,7 @@ services:
     environment:
       DATABASE_URL: "postgresql+asyncpg://bank_user:bank_pass@postgres-db/cards_db"
       GRPC_PORT: 50051
+      VIRTUAL_CARD_ACTIVATION_DELAY: "60"
     depends_on:
       postgres-db:
         condition: service_healthy

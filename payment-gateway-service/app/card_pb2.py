@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ncard.proto\x12\x0c\x63\x61rdprovider\"d\n\x11\x43reateCardRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x12\n\naccount_id\x18\x02 \x01(\t\x12\x11\n\tcard_type\x18\x03 \x01(\t\x12\x17\n\x0finitial_balance\x18\x04 \x01(\x02\"_\n\x12\x43reateCardResponse\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x12\n\nmasked_pan\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x11\n\tcard_type\x18\x04 \x01(\t\"$\n\x0eGetCardRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\"j\n\x0b\x43\x61rdDetails\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x11\n\tcard_type\x18\x03 \x01(\t\x12\x0f\n\x07\x62\x61lance\x18\x04 \x01(\x02\x12\x13\n\x0b\x64\x61ily_limit\x18\x05 \x01(\x02\"6\n\x10\x42lockCardRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"5\n\x11\x42lockCardResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"(\n\x12UnblockCardRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\"7\n\x13UnblockCardResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"x\n\x14\x41uthorizationRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\x12\x10\n\x08\x63urrency\x18\x03 \x01(\t\x12\x13\n\x0bmerchant_id\x18\x04 \x01(\t\x12\x15\n\rmerchant_name\x18\x05 \x01(\t\"\xa1\x02\n\x15\x41uthorizationResponse\x12\x1a\n\x12\x61uthorization_code\x18\x01 \x01(\t\x12G\n\rresponse_code\x18\x02 \x01(\x0e\x32\x30.cardprovider.AuthorizationResponse.ResponseCode\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x16\n\x0etransaction_id\x18\x04 \x01(\t\"z\n\x0cResponseCode\x12\x0c\n\x08\x41PPROVED\x10\x00\x12\x0c\n\x08\x44\x45\x43LINED\x10\x01\x12\x10\n\x0c\x43\x41RD_BLOCKED\x10\x02\x12\x16\n\x12INSUFFICIENT_FUNDS\x10\x03\x12\x10\n\x0c\x43\x41RD_EXPIRED\x10\x04\x12\x12\n\x0eLIMIT_EXCEEDED\x10\x05\"?\n\x11SettlementRequest\x12\x1a\n\x12\x61uthorization_code\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\"M\n\x12SettlementResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0etransaction_id\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\"Q\n\x11\x43hargebackRequest\x12\x16\n\x0etransaction_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x14\n\x0cinitiated_by\x18\x03 \x01(\t\"L\n\x12\x43hargebackResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rchargeback_id\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t2\xdd\x04\n\x0c\x43\x61rdProvider\x12O\n\nCreateCard\x12\x1f.cardprovider.CreateCardRequest\x1a .cardprovider.CreateCardResponse\x12H\n\rGetCardStatus\x12\x1c.cardprovider.GetCardRequest\x1a\x19.cardprovider.CardDetails\x12L\n\tBlockCard\x12\x1e.cardprovider.BlockCardRequest\x1a\x1f.cardprovider.BlockCardResponse\x12R\n\x0bUnblockCard\x12 .cardprovider.UnblockCardRequest\x1a!.cardprovider.UnblockCardResponse\x12_\n\x14\x41uthorizeTransaction\x12\".cardprovider.AuthorizationRequest\x1a#.cardprovider.AuthorizationResponse\x12V\n\x11SettleTransaction\x12\x1f.cardprovider.SettlementRequest\x1a .cardprovider.SettlementResponse\x12W\n\x12InitiateChargeback\x12\x1f.cardprovider.ChargebackRequest\x1a .cardprovider.ChargebackResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ncard.proto\x12\x0c\x63\x61rdprovider\"u\n\x11\x43reateCardRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x12\n\naccount_id\x18\x02 \x01(\t\x12\x11\n\tcard_type\x18\x03 \x01(\t\x12\x17\n\x0finitial_balance\x18\x04 \x01(\x02\x12\x0f\n\x07\x61pi_key\x18\x05 \x01(\t\"p\n\x12\x43reateCardResponse\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x12\n\nmasked_pan\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x11\n\tcard_type\x18\x04 \x01(\t\x12\x0f\n\x07\x62\x61nk_id\x18\x05 \x01(\t\"$\n\x0eGetCardRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\"\x8f\x01\n\x0b\x43\x61rdDetails\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x11\n\tcard_type\x18\x03 \x01(\t\x12\x0f\n\x07\x62\x61lance\x18\x04 \x01(\x02\x12\x13\n\x0b\x64\x61ily_limit\x18\x05 \x01(\x02\x12\x12\n\nmasked_pan\x18\x06 \x01(\t\x12\x0f\n\x07\x62\x61nk_id\x18\x07 \x01(\t\"6\n\x10\x42lockCardRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"5\n\x11\x42lockCardResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"(\n\x12UnblockCardRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\"7\n\x13UnblockCardResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"x\n\x14\x41uthorizationRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\x12\x10\n\x08\x63urrency\x18\x03 \x01(\t\x12\x13\n\x0bmerchant_id\x18\x04 \x01(\t\x12\x15\n\rmerchant_name\x18\x05 \x01(\t\"\xa1\x02\n\x15\x41uthorizationResponse\x12\x1a\n\x12\x61uthorization_code\x18\x01 \x01(\t\x12G\n\rresponse_code\x18\x02 \x01(\x0e\x32\x30.cardprovider.AuthorizationResponse.ResponseCode\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x16\n\x0etransaction_id\x18\x04 \x01(\t\"z\n\x0cResponseCode\x12\x0c\n\x08\x41PPROVED\x10\x00\x12\x0c\n\x08\x44\x45\x43LINED\x10\x01\x12\x10\n\x0c\x43\x41RD_BLOCKED\x10\x02\x12\x16\n\x12INSUFFICIENT_FUNDS\x10\x03\x12\x10\n\x0c\x43\x41RD_EXPIRED\x10\x04\x12\x12\n\x0eLIMIT_EXCEEDED\x10\x05\"?\n\x11SettlementRequest\x12\x1a\n\x12\x61uthorization_code\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\"M\n\x12SettlementResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0etransaction_id\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\"Q\n\x11\x43hargebackRequest\x12\x16\n\x0etransaction_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x14\n\x0cinitiated_by\x18\x03 \x01(\t\"L\n\x12\x43hargebackResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rchargeback_id\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\"U\n\x17UpdateCardStatusRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x12\n\nnew_status\x18\x02 \x01(\t\x12\x12\n\nchanged_by\x18\x03 \x01(\t\"T\n\x18UpdateCardStatusResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x16\n\x0e\x63urrent_status\x18\x03 \x01(\t\"?\n\x13\x41\x63tivateCardRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x14\n\x0c\x61\x63tivated_by\x18\x02 \x01(\t\"8\n\x14\x41\x63tivateCardResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"\x12\n\x10ListCardsRequest\"=\n\x11ListCardsResponse\x12(\n\x05\x63\x61rds\x18\x01 \x03(\x0b\x32\x19.cardprovider.CardDetails\"D\n\x0cTopUpRequest\x12\x12\n\ncard_token\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\x12\x10\n\x08\x63urrency\x18\x03 \x01(\t\"F\n\rTopUpResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x13\n\x0bnew_balance\x18\x03 \x01(\x01\x32\xae\x07\n\x0c\x43\x61rdProvider\x12O\n\nCreateCard\x12\x1f.cardprovider.CreateCardRequest\x1a .cardprovider.CreateCardResponse\x12H\n\rGetCardStatus\x12\x1c.cardprovider.GetCardRequest\x1a\x19.cardprovider.CardDetails\x12L\n\tBlockCard\x12\x1e.cardprovider.BlockCardRequest\x1a\x1f.cardprovider.BlockCardResponse\x12R\n\x0bUnblockCard\x12 .cardprovider.UnblockCardRequest\x1a!.cardprovider.UnblockCardResponse\x12_\n\x14\x41uthorizeTransaction\x12\".cardprovider.AuthorizationRequest\x1a#.cardprovider.AuthorizationResponse\x12V\n\x11SettleTransaction\x12\x1f.cardprovider.SettlementRequest\x1a .cardprovider.SettlementResponse\x12W\n\x12InitiateChargeback\x12\x1f.cardprovider.ChargebackRequest\x1a .cardprovider.ChargebackResponse\x12\x61\n\x10UpdateCardStatus\x12%.cardprovider.UpdateCardStatusRequest\x1a&.cardprovider.UpdateCardStatusResponse\x12U\n\x0c\x41\x63tivateCard\x12!.cardprovider.ActivateCardRequest\x1a\".cardprovider.ActivateCardResponse\x12L\n\tListCards\x12\x1e.cardprovider.ListCardsRequest\x1a\x1f.cardprovider.ListCardsResponse\x12G\n\x0cTopUpPrepaid\x12\x1a.cardprovider.TopUpRequest\x1a\x1b.cardprovider.TopUpResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,35 +32,51 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'card_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_CREATECARDREQUEST']._serialized_start=28
-  _globals['_CREATECARDREQUEST']._serialized_end=128
-  _globals['_CREATECARDRESPONSE']._serialized_start=130
-  _globals['_CREATECARDRESPONSE']._serialized_end=225
-  _globals['_GETCARDREQUEST']._serialized_start=227
-  _globals['_GETCARDREQUEST']._serialized_end=263
-  _globals['_CARDDETAILS']._serialized_start=265
-  _globals['_CARDDETAILS']._serialized_end=371
-  _globals['_BLOCKCARDREQUEST']._serialized_start=373
-  _globals['_BLOCKCARDREQUEST']._serialized_end=427
-  _globals['_BLOCKCARDRESPONSE']._serialized_start=429
-  _globals['_BLOCKCARDRESPONSE']._serialized_end=482
-  _globals['_UNBLOCKCARDREQUEST']._serialized_start=484
-  _globals['_UNBLOCKCARDREQUEST']._serialized_end=524
-  _globals['_UNBLOCKCARDRESPONSE']._serialized_start=526
-  _globals['_UNBLOCKCARDRESPONSE']._serialized_end=581
-  _globals['_AUTHORIZATIONREQUEST']._serialized_start=583
-  _globals['_AUTHORIZATIONREQUEST']._serialized_end=703
-  _globals['_AUTHORIZATIONRESPONSE']._serialized_start=706
-  _globals['_AUTHORIZATIONRESPONSE']._serialized_end=995
-  _globals['_AUTHORIZATIONRESPONSE_RESPONSECODE']._serialized_start=873
-  _globals['_AUTHORIZATIONRESPONSE_RESPONSECODE']._serialized_end=995
-  _globals['_SETTLEMENTREQUEST']._serialized_start=997
-  _globals['_SETTLEMENTREQUEST']._serialized_end=1060
-  _globals['_SETTLEMENTRESPONSE']._serialized_start=1062
-  _globals['_SETTLEMENTRESPONSE']._serialized_end=1139
-  _globals['_CHARGEBACKREQUEST']._serialized_start=1141
-  _globals['_CHARGEBACKREQUEST']._serialized_end=1222
-  _globals['_CHARGEBACKRESPONSE']._serialized_start=1224
-  _globals['_CHARGEBACKRESPONSE']._serialized_end=1300
-  _globals['_CARDPROVIDER']._serialized_start=1303
-  _globals['_CARDPROVIDER']._serialized_end=1908
+  _globals['_CREATECARDREQUEST']._serialized_end=145
+  _globals['_CREATECARDRESPONSE']._serialized_start=147
+  _globals['_CREATECARDRESPONSE']._serialized_end=259
+  _globals['_GETCARDREQUEST']._serialized_start=261
+  _globals['_GETCARDREQUEST']._serialized_end=297
+  _globals['_CARDDETAILS']._serialized_start=300
+  _globals['_CARDDETAILS']._serialized_end=443
+  _globals['_BLOCKCARDREQUEST']._serialized_start=445
+  _globals['_BLOCKCARDREQUEST']._serialized_end=499
+  _globals['_BLOCKCARDRESPONSE']._serialized_start=501
+  _globals['_BLOCKCARDRESPONSE']._serialized_end=554
+  _globals['_UNBLOCKCARDREQUEST']._serialized_start=556
+  _globals['_UNBLOCKCARDREQUEST']._serialized_end=596
+  _globals['_UNBLOCKCARDRESPONSE']._serialized_start=598
+  _globals['_UNBLOCKCARDRESPONSE']._serialized_end=653
+  _globals['_AUTHORIZATIONREQUEST']._serialized_start=655
+  _globals['_AUTHORIZATIONREQUEST']._serialized_end=775
+  _globals['_AUTHORIZATIONRESPONSE']._serialized_start=778
+  _globals['_AUTHORIZATIONRESPONSE']._serialized_end=1067
+  _globals['_AUTHORIZATIONRESPONSE_RESPONSECODE']._serialized_start=945
+  _globals['_AUTHORIZATIONRESPONSE_RESPONSECODE']._serialized_end=1067
+  _globals['_SETTLEMENTREQUEST']._serialized_start=1069
+  _globals['_SETTLEMENTREQUEST']._serialized_end=1132
+  _globals['_SETTLEMENTRESPONSE']._serialized_start=1134
+  _globals['_SETTLEMENTRESPONSE']._serialized_end=1211
+  _globals['_CHARGEBACKREQUEST']._serialized_start=1213
+  _globals['_CHARGEBACKREQUEST']._serialized_end=1294
+  _globals['_CHARGEBACKRESPONSE']._serialized_start=1296
+  _globals['_CHARGEBACKRESPONSE']._serialized_end=1372
+  _globals['_UPDATECARDSTATUSREQUEST']._serialized_start=1374
+  _globals['_UPDATECARDSTATUSREQUEST']._serialized_end=1459
+  _globals['_UPDATECARDSTATUSRESPONSE']._serialized_start=1461
+  _globals['_UPDATECARDSTATUSRESPONSE']._serialized_end=1545
+  _globals['_ACTIVATECARDREQUEST']._serialized_start=1547
+  _globals['_ACTIVATECARDREQUEST']._serialized_end=1610
+  _globals['_ACTIVATECARDRESPONSE']._serialized_start=1612
+  _globals['_ACTIVATECARDRESPONSE']._serialized_end=1668
+  _globals['_LISTCARDSREQUEST']._serialized_start=1670
+  _globals['_LISTCARDSREQUEST']._serialized_end=1688
+  _globals['_LISTCARDSRESPONSE']._serialized_start=1690
+  _globals['_LISTCARDSRESPONSE']._serialized_end=1751
+  _globals['_TOPUPREQUEST']._serialized_start=1753
+  _globals['_TOPUPREQUEST']._serialized_end=1821
+  _globals['_TOPUPRESPONSE']._serialized_start=1823
+  _globals['_TOPUPRESPONSE']._serialized_end=1893
+  _globals['_CARDPROVIDER']._serialized_start=1896
+  _globals['_CARDPROVIDER']._serialized_end=2838
 # @@protoc_insertion_point(module_scope)

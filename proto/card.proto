@@ -10,6 +10,10 @@ service CardProvider {
     rpc AuthorizeTransaction (AuthorizationRequest) returns (AuthorizationResponse);
     rpc SettleTransaction (SettlementRequest) returns (SettlementResponse);
     rpc InitiateChargeback (ChargebackRequest) returns (ChargebackResponse);
+    rpc UpdateCardStatus (UpdateCardStatusRequest) returns (UpdateCardStatusResponse);
+    rpc ActivateCard (ActivateCardRequest) returns (ActivateCardResponse);
+    rpc ListCards (ListCardsRequest) returns (ListCardsResponse);
+    rpc TopUpPrepaid (TopUpRequest) returns (TopUpResponse);
 }
 
 // --- Karty ---
@@ -19,6 +23,7 @@ message CreateCardRequest {
     string account_id = 2;
     string card_type = 3;  // "VIRTUAL" | "PHYSICAL" | "PREPAID"
     float initial_balance = 4;  // tylko dla PREPAID
+    string api_key = 5;
 }
 
 message CreateCardResponse {
@@ -26,6 +31,7 @@ message CreateCardResponse {
     string masked_pan = 2;
     string status = 3;
     string card_type = 4;
+    string bank_id = 5;
 }
 
 message GetCardRequest {
@@ -38,6 +44,8 @@ message CardDetails {
     string card_type = 3;
     float balance = 4;
     float daily_limit = 5;
+    string masked_pan = 6;
+    string bank_id = 7;
 }
 
 message BlockCardRequest {
@@ -107,4 +115,40 @@ message ChargebackResponse {
     bool success = 1;
     string chargeback_id = 2;
     string status = 3;
+}
+
+message UpdateCardStatusRequest {
+    string card_token = 1;
+    string new_status = 2;
+    string changed_by = 3;
+}
+message UpdateCardStatusResponse {
+    bool success = 1;
+    string message = 2;
+    string current_status = 3;
+}
+
+message ActivateCardRequest {
+    string card_token = 1;
+    string activated_by = 2;
+}
+message ActivateCardResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ListCardsRequest {}
+message ListCardsResponse {
+    repeated CardDetails cards = 1;
+}
+
+message TopUpRequest {
+    string card_token = 1;
+    double amount = 2;
+    string currency = 3;
+}
+message TopUpResponse {
+    bool success = 1;
+    string message = 2;
+    double new_balance = 3;
 }
