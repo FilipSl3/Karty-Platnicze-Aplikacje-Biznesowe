@@ -34,16 +34,6 @@ class CardProviderStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.AuthorizeTransaction = channel.unary_unary(
-                '/cardprovider.CardProvider/AuthorizeTransaction',
-                request_serializer=card__pb2.AuthorizationRequest.SerializeToString,
-                response_deserializer=card__pb2.AuthorizationResponse.FromString,
-                _registered_method=True)
-        self.SettleTransaction = channel.unary_unary(
-                '/cardprovider.CardProvider/SettleTransaction',
-                request_serializer=card__pb2.SettlementRequest.SerializeToString,
-                response_deserializer=card__pb2.SettlementResponse.FromString,
-                _registered_method=True)
         self.CreateCard = channel.unary_unary(
                 '/cardprovider.CardProvider/CreateCard',
                 request_serializer=card__pb2.CreateCardRequest.SerializeToString,
@@ -54,22 +44,55 @@ class CardProviderStub(object):
                 request_serializer=card__pb2.GetCardRequest.SerializeToString,
                 response_deserializer=card__pb2.CardDetails.FromString,
                 _registered_method=True)
+        self.BlockCard = channel.unary_unary(
+                '/cardprovider.CardProvider/BlockCard',
+                request_serializer=card__pb2.BlockCardRequest.SerializeToString,
+                response_deserializer=card__pb2.BlockCardResponse.FromString,
+                _registered_method=True)
+        self.UnblockCard = channel.unary_unary(
+                '/cardprovider.CardProvider/UnblockCard',
+                request_serializer=card__pb2.UnblockCardRequest.SerializeToString,
+                response_deserializer=card__pb2.UnblockCardResponse.FromString,
+                _registered_method=True)
+        self.AuthorizeTransaction = channel.unary_unary(
+                '/cardprovider.CardProvider/AuthorizeTransaction',
+                request_serializer=card__pb2.AuthorizationRequest.SerializeToString,
+                response_deserializer=card__pb2.AuthorizationResponse.FromString,
+                _registered_method=True)
+        self.SettleTransaction = channel.unary_unary(
+                '/cardprovider.CardProvider/SettleTransaction',
+                request_serializer=card__pb2.SettlementRequest.SerializeToString,
+                response_deserializer=card__pb2.SettlementResponse.FromString,
+                _registered_method=True)
+        self.InitiateChargeback = channel.unary_unary(
+                '/cardprovider.CardProvider/InitiateChargeback',
+                request_serializer=card__pb2.ChargebackRequest.SerializeToString,
+                response_deserializer=card__pb2.ChargebackResponse.FromString,
+                _registered_method=True)
+        self.UpdateCardStatus = channel.unary_unary(
+                '/cardprovider.CardProvider/UpdateCardStatus',
+                request_serializer=card__pb2.UpdateCardStatusRequest.SerializeToString,
+                response_deserializer=card__pb2.UpdateCardStatusResponse.FromString,
+                _registered_method=True)
+        self.ActivateCard = channel.unary_unary(
+                '/cardprovider.CardProvider/ActivateCard',
+                request_serializer=card__pb2.ActivateCardRequest.SerializeToString,
+                response_deserializer=card__pb2.ActivateCardResponse.FromString,
+                _registered_method=True)
+        self.ListCards = channel.unary_unary(
+                '/cardprovider.CardProvider/ListCards',
+                request_serializer=card__pb2.ListCardsRequest.SerializeToString,
+                response_deserializer=card__pb2.ListCardsResponse.FromString,
+                _registered_method=True)
+        self.TopUpPrepaid = channel.unary_unary(
+                '/cardprovider.CardProvider/TopUpPrepaid',
+                request_serializer=card__pb2.TopUpRequest.SerializeToString,
+                response_deserializer=card__pb2.TopUpResponse.FromString,
+                _registered_method=True)
 
 
 class CardProviderServicer(object):
     """Missing associated documentation comment in .proto file."""
-
-    def AuthorizeTransaction(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def SettleTransaction(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
 
     def CreateCard(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -83,9 +106,83 @@ class CardProviderServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def BlockCard(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UnblockCard(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AuthorizeTransaction(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SettleTransaction(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def InitiateChargeback(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateCardStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ActivateCard(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListCards(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def TopUpPrepaid(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_CardProviderServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'CreateCard': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateCard,
+                    request_deserializer=card__pb2.CreateCardRequest.FromString,
+                    response_serializer=card__pb2.CreateCardResponse.SerializeToString,
+            ),
+            'GetCardStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetCardStatus,
+                    request_deserializer=card__pb2.GetCardRequest.FromString,
+                    response_serializer=card__pb2.CardDetails.SerializeToString,
+            ),
+            'BlockCard': grpc.unary_unary_rpc_method_handler(
+                    servicer.BlockCard,
+                    request_deserializer=card__pb2.BlockCardRequest.FromString,
+                    response_serializer=card__pb2.BlockCardResponse.SerializeToString,
+            ),
+            'UnblockCard': grpc.unary_unary_rpc_method_handler(
+                    servicer.UnblockCard,
+                    request_deserializer=card__pb2.UnblockCardRequest.FromString,
+                    response_serializer=card__pb2.UnblockCardResponse.SerializeToString,
+            ),
             'AuthorizeTransaction': grpc.unary_unary_rpc_method_handler(
                     servicer.AuthorizeTransaction,
                     request_deserializer=card__pb2.AuthorizationRequest.FromString,
@@ -96,15 +193,30 @@ def add_CardProviderServicer_to_server(servicer, server):
                     request_deserializer=card__pb2.SettlementRequest.FromString,
                     response_serializer=card__pb2.SettlementResponse.SerializeToString,
             ),
-            'CreateCard': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateCard,
-                    request_deserializer=card__pb2.CreateCardRequest.FromString,
-                    response_serializer=card__pb2.CreateCardResponse.SerializeToString,
+            'InitiateChargeback': grpc.unary_unary_rpc_method_handler(
+                    servicer.InitiateChargeback,
+                    request_deserializer=card__pb2.ChargebackRequest.FromString,
+                    response_serializer=card__pb2.ChargebackResponse.SerializeToString,
             ),
-            'GetCardStatus': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetCardStatus,
-                    request_deserializer=card__pb2.GetCardRequest.FromString,
-                    response_serializer=card__pb2.CardDetails.SerializeToString,
+            'UpdateCardStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateCardStatus,
+                    request_deserializer=card__pb2.UpdateCardStatusRequest.FromString,
+                    response_serializer=card__pb2.UpdateCardStatusResponse.SerializeToString,
+            ),
+            'ActivateCard': grpc.unary_unary_rpc_method_handler(
+                    servicer.ActivateCard,
+                    request_deserializer=card__pb2.ActivateCardRequest.FromString,
+                    response_serializer=card__pb2.ActivateCardResponse.SerializeToString,
+            ),
+            'ListCards': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListCards,
+                    request_deserializer=card__pb2.ListCardsRequest.FromString,
+                    response_serializer=card__pb2.ListCardsResponse.SerializeToString,
+            ),
+            'TopUpPrepaid': grpc.unary_unary_rpc_method_handler(
+                    servicer.TopUpPrepaid,
+                    request_deserializer=card__pb2.TopUpRequest.FromString,
+                    response_serializer=card__pb2.TopUpResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -116,6 +228,114 @@ def add_CardProviderServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class CardProvider(object):
     """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def CreateCard(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/CreateCard',
+            card__pb2.CreateCardRequest.SerializeToString,
+            card__pb2.CreateCardResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetCardStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/GetCardStatus',
+            card__pb2.GetCardRequest.SerializeToString,
+            card__pb2.CardDetails.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def BlockCard(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/BlockCard',
+            card__pb2.BlockCardRequest.SerializeToString,
+            card__pb2.BlockCardResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UnblockCard(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/UnblockCard',
+            card__pb2.UnblockCardRequest.SerializeToString,
+            card__pb2.UnblockCardResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
 
     @staticmethod
     def AuthorizeTransaction(request,
@@ -172,7 +392,7 @@ class CardProvider(object):
             _registered_method=True)
 
     @staticmethod
-    def CreateCard(request,
+    def InitiateChargeback(request,
             target,
             options=(),
             channel_credentials=None,
@@ -185,9 +405,9 @@ class CardProvider(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/cardprovider.CardProvider/CreateCard',
-            card__pb2.CreateCardRequest.SerializeToString,
-            card__pb2.CreateCardResponse.FromString,
+            '/cardprovider.CardProvider/InitiateChargeback',
+            card__pb2.ChargebackRequest.SerializeToString,
+            card__pb2.ChargebackResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -199,7 +419,7 @@ class CardProvider(object):
             _registered_method=True)
 
     @staticmethod
-    def GetCardStatus(request,
+    def UpdateCardStatus(request,
             target,
             options=(),
             channel_credentials=None,
@@ -212,9 +432,90 @@ class CardProvider(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/cardprovider.CardProvider/GetCardStatus',
-            card__pb2.GetCardRequest.SerializeToString,
-            card__pb2.CardDetails.FromString,
+            '/cardprovider.CardProvider/UpdateCardStatus',
+            card__pb2.UpdateCardStatusRequest.SerializeToString,
+            card__pb2.UpdateCardStatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ActivateCard(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/ActivateCard',
+            card__pb2.ActivateCardRequest.SerializeToString,
+            card__pb2.ActivateCardResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListCards(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/ListCards',
+            card__pb2.ListCardsRequest.SerializeToString,
+            card__pb2.ListCardsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def TopUpPrepaid(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/TopUpPrepaid',
+            card__pb2.TopUpRequest.SerializeToString,
+            card__pb2.TopUpResponse.FromString,
             options,
             channel_credentials,
             insecure,

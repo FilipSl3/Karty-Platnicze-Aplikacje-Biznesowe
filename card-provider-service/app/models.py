@@ -6,14 +6,13 @@ from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 class CardStatus(str, enum.Enum):
-    ACTIVE = "ACTIVE"
-    BLOCKED = "BLOCKED"
-    EXPIRED = "EXPIRED"
-    CANCELLED = "CANCELLED"
-    ORDERED = "ORDERED"
-    IN_PRODUCTION = "IN_PRODUCTION"
-    IN_TRANSIT = "IN_TRANSIT"
-    DELIVERED = "DELIVERED"
+    REQUESTED  = "REQUESTED"
+    PRODUCING  = "PRODUCING"
+    SHIPPED    = "SHIPPED"
+    ACTIVE     = "ACTIVE"
+    BLOCKED    = "BLOCKED"
+    EXPIRED    = "EXPIRED"
+    CANCELLED  = "CANCELLED"
 
 class CardType(str, enum.Enum):
     VIRTUAL = "VIRTUAL"
@@ -44,6 +43,7 @@ class Card(Base):
     daily_limit = Column(Numeric(12, 2), default=1000)
     created_at = Column(DateTime, default=datetime.utcnow)
     activated_at = Column(DateTime, nullable=True)
+    bank_id = Column(String, nullable=False, default="UNKNOWN")
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -83,4 +83,14 @@ class Chargeback(Base):
     status = Column(String, default="INITIATED")
     reason = Column(String)
     initiated_by = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class BankApiKey(Base):
+    __tablename__ = "bank_api_keys"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    bank_id = Column(String, unique=True, nullable=False)
+    api_key = Column(String, unique=True, nullable=False)
+    bin_prefix = Column(String(4), nullable=False)
+    currency = Column(String(3), nullable=False)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

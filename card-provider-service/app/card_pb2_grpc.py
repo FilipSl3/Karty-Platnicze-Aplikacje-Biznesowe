@@ -69,14 +69,33 @@ class CardProviderStub(object):
                 request_serializer=card__pb2.ChargebackRequest.SerializeToString,
                 response_deserializer=card__pb2.ChargebackResponse.FromString,
                 _registered_method=True)
+        self.UpdateCardStatus = channel.unary_unary(
+                '/cardprovider.CardProvider/UpdateCardStatus',
+                request_serializer=card__pb2.UpdateCardStatusRequest.SerializeToString,
+                response_deserializer=card__pb2.UpdateCardStatusResponse.FromString,
+                _registered_method=True)
+        self.ActivateCard = channel.unary_unary(
+                '/cardprovider.CardProvider/ActivateCard',
+                request_serializer=card__pb2.ActivateCardRequest.SerializeToString,
+                response_deserializer=card__pb2.ActivateCardResponse.FromString,
+                _registered_method=True)
+        self.ListCards = channel.unary_unary(
+                '/cardprovider.CardProvider/ListCards',
+                request_serializer=card__pb2.ListCardsRequest.SerializeToString,
+                response_deserializer=card__pb2.ListCardsResponse.FromString,
+                _registered_method=True)
+        self.TopUpPrepaid = channel.unary_unary(
+                '/cardprovider.CardProvider/TopUpPrepaid',
+                request_serializer=card__pb2.TopUpRequest.SerializeToString,
+                response_deserializer=card__pb2.TopUpResponse.FromString,
+                _registered_method=True)
 
 
 class CardProviderServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def CreateCard(self, request, context):
-        """Wydawanie kart
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -88,8 +107,7 @@ class CardProviderServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def BlockCard(self, request, context):
-        """Zarządzanie kartą
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -101,8 +119,7 @@ class CardProviderServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def AuthorizeTransaction(self, request, context):
-        """Autoryzacja i rozliczenia
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -114,8 +131,31 @@ class CardProviderServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def InitiateChargeback(self, request, context):
-        """Chargeback
-        """
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateCardStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ActivateCard(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListCards(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def TopUpPrepaid(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -157,6 +197,26 @@ def add_CardProviderServicer_to_server(servicer, server):
                     servicer.InitiateChargeback,
                     request_deserializer=card__pb2.ChargebackRequest.FromString,
                     response_serializer=card__pb2.ChargebackResponse.SerializeToString,
+            ),
+            'UpdateCardStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateCardStatus,
+                    request_deserializer=card__pb2.UpdateCardStatusRequest.FromString,
+                    response_serializer=card__pb2.UpdateCardStatusResponse.SerializeToString,
+            ),
+            'ActivateCard': grpc.unary_unary_rpc_method_handler(
+                    servicer.ActivateCard,
+                    request_deserializer=card__pb2.ActivateCardRequest.FromString,
+                    response_serializer=card__pb2.ActivateCardResponse.SerializeToString,
+            ),
+            'ListCards': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListCards,
+                    request_deserializer=card__pb2.ListCardsRequest.FromString,
+                    response_serializer=card__pb2.ListCardsResponse.SerializeToString,
+            ),
+            'TopUpPrepaid': grpc.unary_unary_rpc_method_handler(
+                    servicer.TopUpPrepaid,
+                    request_deserializer=card__pb2.TopUpRequest.FromString,
+                    response_serializer=card__pb2.TopUpResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -348,6 +408,114 @@ class CardProvider(object):
             '/cardprovider.CardProvider/InitiateChargeback',
             card__pb2.ChargebackRequest.SerializeToString,
             card__pb2.ChargebackResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateCardStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/UpdateCardStatus',
+            card__pb2.UpdateCardStatusRequest.SerializeToString,
+            card__pb2.UpdateCardStatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ActivateCard(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/ActivateCard',
+            card__pb2.ActivateCardRequest.SerializeToString,
+            card__pb2.ActivateCardResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListCards(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/ListCards',
+            card__pb2.ListCardsRequest.SerializeToString,
+            card__pb2.ListCardsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def TopUpPrepaid(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/TopUpPrepaid',
+            card__pb2.TopUpRequest.SerializeToString,
+            card__pb2.TopUpResponse.FromString,
             options,
             channel_credentials,
             insecure,
