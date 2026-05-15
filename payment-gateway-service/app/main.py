@@ -5,9 +5,24 @@ from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from app import card_pb2, card_pb2_grpc
+import hmac as hmac_lib
+import hashlib
+import time
+import json
+from fastapi import Header
 
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
 
+BANK_HMAC_SECRETS = {
+    "bank-key-pl-a": "secret-pl-a-hmac",
+    "bank-key-pl-b": "secret-pl-b-hmac",
+    "bank-key-eu-a": "secret-eu-a-hmac",
+    "bank-key-eu-b": "secret-eu-b-hmac",
+    "bank-key-uk-a": "secret-uk-a-hmac",
+    "bank-key-uk-b": "secret-uk-b-hmac",
+    "bank-key-us-a": "secret-us-a-hmac",
+    "bank-key-us-b": "secret-us-b-hmac",
+}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,7 +56,6 @@ class IssueCardRequest(BaseModel):
     account_id: str
     card_type: str  # VIRTUAL | PHYSICAL | PREPAID
     initial_balance: float = 0.0
-    api_key: str
 
 
 class CardStatusRequest(BaseModel):
@@ -128,7 +142,10 @@ async def list_cards():
 
 
 @app.post("/api/v1/cards/issue", tags=["Karty"], summary="Wydaj nową kartę")
-async def issue_card(body: IssueCardRequest):
+async def issue_card(
+    body: IssueCardRequest,
+    x_api_key: str = Header(..., alias="X-API-Key"),
+):
     """
     Wydaje nową kartę płatniczą dla klienta banku.
 
@@ -137,9 +154,29 @@ async def issue_card(body: IssueCardRequest):
     - **PREPAID** – startuje jako REQUESTED, posiada własne saldo (initial_balance)
 
     Karta **nie może** być używana do płatności dopóki nie osiągnie statusu **ACTIVE**.
+
+    **Wymagane nagłówki:**
+    - `X-API-Key` – klucz API banku (np. `bank-key-pl-a`)
+
+    **Bezpieczeństwo:**
+    - Żądanie podpisywane HMAC-SHA256 przed przekazaniem do Card Provider
+    - Timestamp chroni przed replay attacks (żądanie ważne 30s)
     """
     if body.card_type not in ("VIRTUAL", "PHYSICAL", "PREPAID"):
         raise HTTPException(status_code=400, detail="card_type must be VIRTUAL, PHYSICAL or PREPAID")
+
+    hmac_secret = BANK_HMAC_SECRETS.get(x_api_key)
+    if not hmac_secret:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    body_dict = {
+        "user_id": body.user_id,
+        "account_id": body.account_id,
+        "card_type": body.card_type,
+        "initial_balance": body.initial_balance,
+    }
+    signature, timestamp = generate_hmac_signature(body_dict, hmac_secret)
+
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
             stub = card_pb2_grpc.CardProviderStub(channel)
@@ -148,7 +185,9 @@ async def issue_card(body: IssueCardRequest):
                 account_id=body.account_id,
                 card_type=body.card_type,
                 initial_balance=body.initial_balance,
-                api_key=body.api_key,
+                api_key=x_api_key,
+                signature=signature,
+                timestamp=timestamp,
             ))
             return {
                 "card_token": response.card_token,
@@ -298,3 +337,19 @@ async def topup_prepaid(card_token: str, body: TopUpRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def generate_hmac_signature(body: dict, secret: str) -> tuple[str, str]:
+    """
+    Generuje podpis HMAC-SHA256 dla żądania.
+    Używane przez Payment Gateway przed przekazaniem do Card Provider.
+    """
+    timestamp = str(int(time.time()))
+    body_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
+    payload = timestamp + body_json
+    signature = hmac_lib.new(
+        secret.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    return signature, timestamp

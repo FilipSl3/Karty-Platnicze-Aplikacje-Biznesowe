@@ -93,4 +93,5 @@ class BankApiKey(Base):
     bin_prefix = Column(String(4), nullable=False)
     currency = Column(String(3), nullable=False)
     is_active = Column(Boolean, default=True)
+    hmac_secret = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

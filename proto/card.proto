@@ -24,6 +24,8 @@ message CreateCardRequest {
     string card_type = 3;  // "VIRTUAL" | "PHYSICAL" | "PREPAID"
     float initial_balance = 4;  // tylko dla PREPAID
     string api_key = 5;
+    string signature = 6;    // HMAC-SHA256 podpis
+    string timestamp = 7;    // Unix timestamp jako string
 }
 
 message CreateCardResponse {
