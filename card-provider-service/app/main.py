@@ -5,6 +5,10 @@ import uuid
 import secrets
 import os
 import grpc
+import hmac as hmac_lib
+import hashlib
+import time
+import json
 from datetime import datetime
 from grpc import aio
 from sqlalchemy import select
@@ -19,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Czas aktywacji karty wirtualnej
 VIRTUAL_CARD_ACTIVATION_DELAY = int(os.getenv("VIRTUAL_CARD_ACTIVATION_DELAY", "3600"))
+
+SIGNATURE_MAX_AGE_SECONDS = 30
 
 # Maszyna stanów – dozwolone przejścia
 ALLOWED_TRANSITIONS = {
@@ -71,6 +77,54 @@ async def get_bank_by_api_key(db, api_key: str) -> BankApiKey | None:
     return result.scalar_one_or_none()
 
 
+def verify_hmac_signature(
+        body: dict,
+        signature: str,
+        timestamp: str,
+        secret: str
+) -> tuple[bool, str]:
+    """
+    Weryfikuje podpis HMAC-SHA256 żądania.
+
+    Zwraca (True, "") jeśli OK lub (False, "powód") jeśli błąd.
+
+    Algorytm:
+    1. Sprawdź czy timestamp nie jest za stary (max 30s)
+    2. Zbuduj payload: timestamp + JSON body (bez spacji)
+    3. Oblicz HMAC-SHA256 z sekretem banku
+    4. Porównaj z podpisem z nagłówka
+    """
+    # Weryfikacja timestamp - replay protection
+    try:
+        ts = int(timestamp)
+    except (ValueError, TypeError):
+        return False, "Invalid timestamp format"
+
+    age = abs(time.time() - ts)
+    if age > SIGNATURE_MAX_AGE_SECONDS:
+        return False, f"Request expired ({int(age)}s old, max {SIGNATURE_MAX_AGE_SECONDS}s)"
+
+    # Buduj payload identycznie jak bank
+    try:
+        body_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
+    except Exception:
+        return False, "Failed to serialize body"
+
+    payload = timestamp + body_json
+
+    # Oblicz oczekiwany podpis
+    expected = hmac_lib.new(
+        secret.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+
+    # Bezpieczne porównanie (timing-safe)
+    if not hmac_lib.compare_digest(expected, signature):
+        return False, "Invalid signature"
+
+    return True, ""
+
 async def seed_bank_api_keys():
     """Wstawia predefiniowane klucze API banków jeśli nie istnieją."""
     async with AsyncSessionLocal() as db:
@@ -98,16 +152,38 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
         logger.info(f"CreateCard: user={request.user_id} type={request.card_type}")
 
         if request.card_type not in ("VIRTUAL", "PHYSICAL", "PREPAID"):
-            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Unknown card_type: {request.card_type}")
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT,
+                                f"Unknown card_type: {request.card_type}")
             return
 
-
         async with AsyncSessionLocal() as db:
-            # Weryfikacja klucza API banku
+            # Krok 1 – weryfikacja klucza API
             bank = await get_bank_by_api_key(db, request.api_key)
             if not bank:
-                await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Invalid or inactive bank API key")
+                await context.abort(grpc.StatusCode.UNAUTHENTICATED,
+                                    "Invalid or inactive bank API key")
                 return
+
+            # Krok 2 – weryfikacja podpisu HMAC
+            body_dict = {
+                "user_id": request.user_id,
+                "account_id": request.account_id,
+                "card_type": request.card_type,
+                "initial_balance": request.initial_balance,
+            }
+            valid, reason = verify_hmac_signature(
+                body=body_dict,
+                signature=request.signature,
+                timestamp=request.timestamp,
+                secret=bank.hmac_secret,
+            )
+            if not valid:
+                logger.warning(f"HMAC verification failed for bank {bank.bank_id}: {reason}")
+                await context.abort(grpc.StatusCode.UNAUTHENTICATED,
+                                    f"Signature verification failed: {reason}")
+                return
+
+            logger.info(f"Bank {bank.bank_id} authenticated successfully")
 
 
             card = Card(
