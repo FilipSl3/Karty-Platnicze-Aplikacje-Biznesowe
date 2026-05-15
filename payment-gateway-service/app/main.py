@@ -1,7 +1,7 @@
 # payment-gateway-service/app/main.py
 import os
 import grpc
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from app import card_pb2, card_pb2_grpc
@@ -9,7 +9,6 @@ import hmac as hmac_lib
 import hashlib
 import time
 import json
-from fastapi import Header
 
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
 
@@ -23,6 +22,28 @@ BANK_HMAC_SECRETS = {
     "bank-key-us-a": "secret-us-a-hmac",
     "bank-key-us-b": "secret-us-b-hmac",
 }
+
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "admin-secret-key-2026")
+
+def generate_hmac_signature(body: dict, secret: str) -> tuple[str, str]:
+    """
+    Generuje podpis HMAC-SHA256 dla żądania.
+    Używane przez Payment Gateway przed przekazaniem do Card Provider.
+    """
+    timestamp = str(int(time.time()))
+    body_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
+    payload = timestamp + body_json
+    signature = hmac_lib.new(
+        secret.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    return signature, timestamp
+
+def verify_admin_key(x_admin_key: str = Header(None, alias="X-Admin-Key")):
+    if x_admin_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    return x_admin_key
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -121,8 +142,13 @@ async def test_grpc():
 # --- Karty ---
 
 @app.get("/api/v1/cards", tags=["Karty"], summary="Lista wszystkich kart")
-async def list_cards():
-    """Zwraca listę wszystkich kart w systemie (dla operatora)."""
+async def list_cards(
+    admin_key: str = Depends(verify_admin_key)
+):
+    """
+    Lista wszystkich kart w systemie.
+    **Wymaga nagłówka X-Admin-Key** – tylko dla operatorów Card Provider.
+    """
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
             stub = card_pb2_grpc.CardProviderStub(channel)
@@ -135,6 +161,7 @@ async def list_cards():
                     "card_type": c.card_type,
                     "balance": c.balance,
                     "daily_limit": c.daily_limit,
+                    "bank_id": c.bank_id,
                 } for c in response.cards
             ]}
     except Exception as e:
@@ -215,19 +242,35 @@ async def get_card(card_token: str):
                 "card_type": response.card_type,
                 "balance": response.balance,
                 "daily_limit": response.daily_limit,
+                "bank_id": response.bank_id,
             }
     except Exception as e:
         raise HTTPException(status_code=404, detail="Card not found")
 
 
 @app.patch("/api/v1/cards/{card_token}/status", tags=["Karty"], summary="Zablokuj lub odblokuj kartę")
-async def update_card_status(card_token: str, body: CardStatusRequest):
+async def update_card_status(
+    card_token: str,
+    body: CardStatusRequest,
+    x_api_key: str = Header(None, alias="X-API-Key"),
+    x_admin_key: str = Header(None, alias="X-Admin-Key"),):
     """
     Zastrzega lub odblokowuje kartę.
 
     - **BLOCKED** – karta nie może być używana do płatności
     - **ACTIVE** – karta wraca do normalnego działania
     """
+
+    if not x_api_key and not x_admin_key:
+        raise HTTPException(status_code=401, detail="X-API-Key or X-Admin-Key required")
+
+    if x_admin_key:
+        if x_admin_key != ADMIN_API_KEY:
+            raise HTTPException(status_code=403, detail="Invalid admin key")
+    elif x_api_key:
+        if x_api_key not in BANK_HMAC_SECRETS:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
             stub = card_pb2_grpc.CardProviderStub(channel)
@@ -248,17 +291,22 @@ async def update_card_status(card_token: str, body: CardStatusRequest):
 
 # --- Cykl życia karty ---
 
-@app.patch("/api/v1/cards/{card_token}/lifecycle", tags=["Cykl życia karty"],
-           summary="Przesuń kartę przez cykl produkcji (operator banku)")
-async def update_lifecycle(card_token: str, body: UpdateLifecycleRequest):
+@app.patch("/api/v1/cards/{card_token}/lifecycle",
+           tags=["Cykl życia karty"],
+           summary="Przesuń kartę przez cykl produkcji (operator Card Provider)")
+async def update_lifecycle(
+    card_token: str,
+    body: UpdateLifecycleRequest,
+    admin_key: str = Depends(verify_admin_key)
+):
     """
-    Tylko dla operatora banku / systemu produkcji kart.
+    Tylko dla operatora **Card Provider** (nas) – nie dla banków.
 
     Dozwolone przejścia:
     - **REQUESTED → PRODUCING** – karta trafia do produkcji
-    - **PRODUCING → SHIPPED** – karta wysłana do banku/klienta
+    - **PRODUCING → SHIPPED** – karta wysłana do banku
 
-    Po statusie SHIPPED klient aktywuje kartę przez `/activate`.
+    **Wymaga nagłówka X-Admin-Key.**
     """
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
@@ -339,17 +387,3 @@ async def topup_prepaid(card_token: str, body: TopUpRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def generate_hmac_signature(body: dict, secret: str) -> tuple[str, str]:
-    """
-    Generuje podpis HMAC-SHA256 dla żądania.
-    Używane przez Payment Gateway przed przekazaniem do Card Provider.
-    """
-    timestamp = str(int(time.time()))
-    body_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
-    payload = timestamp + body_json
-    signature = hmac_lib.new(
-        secret.encode('utf-8'),
-        payload.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    return signature, timestamp

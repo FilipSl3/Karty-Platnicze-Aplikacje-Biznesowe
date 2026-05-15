@@ -6,10 +6,9 @@ import json
 import requests
 
 # Dane banku (z naszego seeda)
-API_KEY = "bank-key-pl-a"
-HMAC_SECRET = "secret-pl-a-hmac"
-BASE_URL = "http://localhost:8000"
-
+API_KEY = "bank-key-pl-b"
+HMAC_SECRET = "secret-pl-b-hmac"
+BASE_URL = "http://localhost:8072"
 
 def generate_signature(body: dict, secret: str) -> tuple[str, str]:
     timestamp = str(int(time.time()))

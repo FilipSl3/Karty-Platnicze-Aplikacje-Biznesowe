@@ -391,10 +391,11 @@ docker-compose up --build
 
 | Serwis | Adres | Opis |
 |---|---|---|
-| REST API + Swagger | http://localhost:8000/docs | Główny interfejs |
-| Payment Gateway | http://localhost:8000 | REST API |
-| Card Provider | localhost:50051 | gRPC (wewnętrzny) |
-| PostgreSQL | localhost:5433 | Baza danych |
+| REST API + Swagger | http://localhost:8072/docs | Główny interfejs |
+| Payment Gateway | http://localhost:8072 | REST API |
+| Card Provider | localhost:50091 | gRPC (wewnętrzny) |
+| PostgreSQL | localhost:5472 | Baza danych |
+| Admin Panel | http://localhost:3072 | Panel admina |
 | MinIO Console | http://localhost:9001 | Archiwum (planowane) |
 
 ### Zmienne środowiskowe
