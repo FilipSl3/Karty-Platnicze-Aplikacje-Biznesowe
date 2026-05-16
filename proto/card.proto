@@ -14,6 +14,7 @@ service CardProvider {
     rpc ActivateCard (ActivateCardRequest) returns (ActivateCardResponse);
     rpc ListCards (ListCardsRequest) returns (ListCardsResponse);
     rpc TopUpPrepaid (TopUpRequest) returns (TopUpResponse);
+    rpc GetFullPan (GetCardRequest) returns (FullPanResponse);
 }
 
 // --- Karty ---
@@ -34,6 +35,10 @@ message CreateCardResponse {
     string status = 3;
     string card_type = 4;
     string bank_id = 5;
+    string full_pan = 6;
+    string cvv = 7;
+    int32 expiry_month = 8;
+    int32 expiry_year = 9;
 }
 
 message GetCardRequest {
@@ -48,6 +53,8 @@ message CardDetails {
     float daily_limit = 5;
     string masked_pan = 6;
     string bank_id = 7;
+    int32 expiry_month = 8;
+    int32 expiry_year = 9;
 }
 
 message BlockCardRequest {
@@ -153,4 +160,13 @@ message TopUpResponse {
     bool success = 1;
     string message = 2;
     double new_balance = 3;
+}
+
+message FullPanResponse {
+    string card_token = 1;
+    string full_pan = 2;
+    string masked_pan = 3;
+    string cvv = 4;
+    int32 expiry_month = 5;
+    int32 expiry_year = 6;
 }

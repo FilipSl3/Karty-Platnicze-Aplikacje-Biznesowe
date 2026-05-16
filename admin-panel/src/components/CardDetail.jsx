@@ -20,6 +20,8 @@ export default function CardDetail({ token, onBack, onRefresh }) {
   const [actionLoading, setActionLoading] = useState(false)
   const [message, setMessage] = useState(null)
   const [topupAmount, setTopupAmount] = useState('')
+  const [fullPanData, setFullPanData] = useState(null)
+  const [fullPanLoading, setFullPanLoading] = useState(false)
 
   const fetchCard = async () => {
     try {
@@ -33,7 +35,11 @@ export default function CardDetail({ token, onBack, onRefresh }) {
     }
   }
 
-  useEffect(() => { fetchCard() }, [token])
+  useEffect(() => {
+    setFullPanData(null)
+    setMessage(null)
+    fetchCard()
+  }, [token])
 
   const handleAction = async (action, ...args) => {
     setActionLoading(true)
@@ -52,6 +58,18 @@ export default function CardDetail({ token, onBack, onRefresh }) {
       setActionLoading(false)
     }
   }
+
+  const handleShowFullPan = async () => {
+  setFullPanLoading(true)
+  try {
+    const res = await cardAPI.getFullPan(token)
+    setFullPanData(res.data)
+  } catch {
+    setMessage({ type: 'error', text: 'Nie można pobrać danych karty' })
+  } finally {
+    setFullPanLoading(false)
+  }
+}
 
   if (loading) return <div style={styles.loading}>Ładowanie...</div>
   if (!card) return <div style={styles.loading}>Brak danych</div>
@@ -90,6 +108,42 @@ export default function CardDetail({ token, onBack, onRefresh }) {
         <Row label="Limit dzienny" value={`${card.daily_limit?.toFixed(2)} PLN`} />
         <Row label="Token" value={card.card_token} mono small />
       </div>
+
+      {fullPanData ? (
+        <div style={styles.fullPanBox}>
+          <div style={styles.fullPanTitle}>🔓 Pełne dane karty (DEV)</div>
+          <div style={styles.fullPanRow}>
+            <span>PAN</span>
+            <span style={{fontFamily:'monospace', letterSpacing:'2px'}}>
+              {fullPanData.full_pan.replace(/(\d{4})/g, '$1 ').trim()}
+            </span>
+          </div>
+          <div style={styles.fullPanRow}>
+            <span>CVV</span>
+            <span style={{fontFamily:'monospace'}}>{fullPanData.cvv}</span>
+          </div>
+          <div style={styles.fullPanRow}>
+            <span>Ważna do</span>
+            <span style={{fontFamily:'monospace'}}>
+              {String(fullPanData.expiry_month).padStart(2,'0')}/{fullPanData.expiry_year}
+            </span>
+          </div>
+          <button
+            onClick={() => setFullPanData(null)}
+            style={{...styles.actionBtn, background:'#64748b', marginTop:'8px', fontSize:'11px'}}
+          >
+            Ukryj
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={handleShowFullPan}
+          disabled={fullPanLoading}
+          style={{...styles.actionBtn, background:'#f59e0b', marginTop:'8px'}}
+        >
+          {fullPanLoading ? '...' : '🔓 Pokaż pełne dane karty (DEV)'}
+        </button>
+      )}
 
         {/* Cykl życia */}
         <div style={styles.section}>
@@ -256,7 +310,7 @@ const styles = {
   },
   tableLabel: { fontSize: '12px', color: '#64748b' },
   tableValue: { fontSize: '13px', fontWeight: '500', color: '#1e293b' },
-  section: { marginBottom: '16px' },
+  section: { marginBottom: '16px', marginTop: '10px' },
   sectionTitle: {
     fontSize: '13px', fontWeight: '600', color: '#374151',
     marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.5px'
@@ -303,11 +357,33 @@ const styles = {
     padding: '10px 16px', color: 'white', border: 'none',
     borderRadius: '8px', fontSize: '13px', fontWeight: '600',
     fontFamily: 'Inter, sans-serif', transition: 'opacity 0.15s',
-    textAlign: 'left'
+    textAlign: 'left',
   },
   topup: { display: 'flex', gap: '8px' },
   topupInput: {
     flex: 1, padding: '10px 12px', border: '1.5px solid #e2e8f0',
     borderRadius: '8px', fontSize: '13px', fontFamily: 'Inter, sans-serif'
+  },
+  fullPanBox: {
+    background: '#fffbeb',
+    border: '1.5px solid #f59e0b',
+    borderRadius: '10px',
+    padding: '12px 16px',
+    marginTop: '8px',
+    marginBottom: '15px',
+  },
+  fullPanTitle: {
+    fontSize: '12px',
+    fontWeight: '700',
+    color: '#92400e',
+    marginBottom: '8px',
+  },
+  fullPanRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: '13px',
+    padding: '4px 0',
+    borderBottom: '1px solid #fde68a',
+    color: '#1e293b',
   },
 }

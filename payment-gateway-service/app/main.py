@@ -120,6 +120,16 @@ async def root():
 async def test_grpc():
     """Testuje połączenie gRPC z Card Provider."""
     try:
+        test_api_key = "bank-key-pl-a"
+        hmac_secret = BANK_HMAC_SECRETS[test_api_key]
+        body_dict = {
+            "user_id": "test_user",
+            "account_id": "test_acc",
+            "card_type": "VIRTUAL",
+            "initial_balance": 0.0,
+        }
+        signature, timestamp = generate_hmac_signature(body_dict, hmac_secret)
+
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
             stub = card_pb2_grpc.CardProviderStub(channel)
             response = await stub.CreateCard(card_pb2.CreateCardRequest(
@@ -127,13 +137,16 @@ async def test_grpc():
                 account_id="test_acc",
                 card_type="VIRTUAL",
                 initial_balance=0.0,
-                api_key="bank-key-pl-a",
+                api_key=test_api_key,
+                signature=signature,
+                timestamp=timestamp,
             ))
             return {
                 "status": "Connection OK",
                 "card_token": response.card_token,
                 "masked_pan": response.masked_pan,
-                "card_status": response.status
+                "card_status": response.status,
+                "bank_id": response.bank_id,
             }
     except Exception as e:
         return {"error": str(e)}
@@ -219,10 +232,14 @@ async def issue_card(
             return {
                 "card_token": response.card_token,
                 "masked_pan": response.masked_pan,
+                "full_pan": response.full_pan,
+                "cvv": response.cvv,
+                "expiry_month": response.expiry_month,
+                "expiry_year": response.expiry_year,
                 "status": response.status,
                 "card_type": response.card_type,
                 "bank_id": response.bank_id,
-                "message": "Card issued. Status: REQUESTED. Must go through lifecycle before use."
+                "message": "IMPORTANT: Save full_pan and cvv - they will never be shown again."
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -387,3 +404,32 @@ async def topup_prepaid(card_token: str, body: TopUpRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/v1/cards/{card_token}/full-pan",
+         tags=["DEV / Admin"],
+         summary="[ADMIN] Pokaż pełne dane karty – tylko do testów")
+async def get_full_pan(
+    card_token: str,
+    admin_key: str = Depends(verify_admin_key),
+):
+    """
+    Zwraca odszyfrowany PAN, CVV i datę ważności.
+
+    ⚠️ **Tylko dla admina i celów testowych.**
+    Wymaga nagłówka `X-Admin-Key`.
+    """
+    try:
+        async with grpc.aio.insecure_channel(GRPC_URL) as channel:
+            stub = card_pb2_grpc.CardProviderStub(channel)
+            response = await stub.GetFullPan(card_pb2.GetCardRequest(
+                card_token=card_token
+            ))
+            return {
+                "card_token": response.card_token,
+                "full_pan": response.full_pan,
+                "masked_pan": response.masked_pan,
+                "cvv": response.cvv,
+                "expiry_month": response.expiry_month,
+                "expiry_year": response.expiry_year,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="Card not found")

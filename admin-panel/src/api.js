@@ -20,6 +20,7 @@ api.interceptors.request.use(config => {
 export const cardAPI = {
   list: () => api.get('/cards'),
   get: (token) => api.get(`/cards/${token}`),
+  getFullPan: (token) => api.get(`/cards/${token}/full-pan`),
   issue: (data) => api.post('/cards/issue', data),
   block: (token, reason) =>
     api.patch(`/cards/${token}/status`, { status: 'BLOCKED', reason }),

@@ -12,6 +12,8 @@ import json
 from datetime import datetime
 from grpc import aio
 from sqlalchemy import select
+from cryptography.fernet import Fernet
+import base64
 
 from app import card_pb2_grpc
 import app.card_pb2 as card_pb2
@@ -26,6 +28,9 @@ VIRTUAL_CARD_ACTIVATION_DELAY = int(os.getenv("VIRTUAL_CARD_ACTIVATION_DELAY", "
 
 SIGNATURE_MAX_AGE_SECONDS = 30
 
+PAN_ENCRYPTION_KEY = os.getenv("PAN_ENCRYPTION_KEY", "karty-platnicze-key-2026")
+CARD_VERIFICATION_KEY = os.getenv("CARD_VERIFICATION_KEY", "cvk-secret-key-2026")
+
 # Maszyna stanów – dozwolone przejścia
 ALLOWED_TRANSITIONS = {
     CardStatus.REQUESTED: [CardStatus.PRODUCING],
@@ -36,13 +41,95 @@ ALLOWED_TRANSITIONS = {
 }
 
 
+def get_fernet() -> Fernet:
+    """Zwraca instancję Fernet do szyfrowania/deszyfrowania PAN."""
+    key_bytes = PAN_ENCRYPTION_KEY.encode('utf-8')[:32].ljust(32, b'0')
+    key = base64.urlsafe_b64encode(key_bytes)
+    return Fernet(key)
+
+
+def encrypt_pan(full_pan: str) -> str:
+    """Szyfruje pełny PAN przed zapisem do bazy."""
+    return get_fernet().encrypt(full_pan.encode()).decode()
+
+
+def decrypt_pan(encrypted_pan: str) -> str:
+    """Odszyfrowuje PAN – tylko przy autoryzacji."""
+    return get_fernet().decrypt(encrypted_pan.encode()).decode()
+
+
+def generate_cvv(pan: str, expiry_month: int, expiry_year: int) -> str:
+    """
+    Generuje 3-cyfrowy CVV kryptograficznie.
+    CVV nie jest przechowywany – odtwarzany przy weryfikacji z tego samego klucza.
+    """
+    expiry = f"{expiry_month:02d}{expiry_year:02d}"
+    payload = f"{pan}{expiry}101"  # 101 = service code
+    h = hmac_lib.new(
+        CARD_VERIFICATION_KEY.encode(),
+        payload.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    digits = ''.join(filter(str.isdigit, h))
+    return digits[:3].zfill(3)
+
+
+def verify_cvv(pan: str, expiry_month: int, expiry_year: int, cvv_input: str) -> bool:
+    """Weryfikuje CVV bez przechowywania go w bazie."""
+    expected = generate_cvv(pan, expiry_month, expiry_year)
+    return hmac_lib.compare_digest(expected, cvv_input)
+
+
+def luhn_checksum(number: str) -> int:
+    """Oblicza sumę kontrolną algorytmu Luhna."""
+    digits = [int(d) for d in number]
+    odd_digits = digits[-1::-2]
+    even_digits = digits[-2::-2]
+    total = sum(odd_digits)
+    for d in even_digits:
+        total += sum(divmod(d * 2, 10))
+    return total % 10
+
+
+def generate_pan(bin_prefix: str) -> tuple[str, str]:
+    """
+    Generuje poprawny 16-cyfrowy PAN:
+    BIN(6) + środkowe(9) + cyfra_Luhna(1)
+    Zwraca (full_pan, masked_pan).
+    """
+    middle = f"{secrets.randbelow(1_000_000_000):09d}"
+    partial = bin_prefix + middle
+    check = luhn_checksum(partial + "0")
+    luhn_digit = (10 - check) % 10
+    full_pan = partial + str(luhn_digit)
+    masked_pan = f"{bin_prefix[:4]} {bin_prefix[4:]}** **** {full_pan[-4:]}"
+    return full_pan, masked_pan
+
+
+async def generate_unique_pan(bin_prefix: str, db) -> tuple[str, str]:
+    """Generuje unikalny PAN – sprawdza kolizje w bazie. Max 10 prób."""
+    for attempt in range(10):
+        full_pan, masked_pan = generate_pan(bin_prefix)
+        encrypted = encrypt_pan(full_pan)
+        existing = await db.execute(
+            select(Card).where(Card.pan_encrypted == encrypted)
+        )
+        if not existing.scalar_one_or_none():
+            return full_pan, masked_pan
+        logger.warning(f"PAN collision on attempt {attempt + 1}, retrying...")
+    raise RuntimeError("Failed to generate unique PAN after 10 attempts")
+
+
+def generate_expiry() -> tuple[int, int]:
+    """Generuje datę ważności – 3 lata od teraz."""
+    now = datetime.utcnow()
+    expiry_year = (now.year + 3) % 100  # np. 2026 → 26
+    expiry_month = now.month
+    return expiry_month, expiry_year
+
+
 def generate_token() -> str:
     return f"tok_{secrets.token_hex(16)}"
-
-
-def generate_masked_pan(bin_prefix: str) -> str:
-    last4 = secrets.randbelow(9999)
-    return f"{bin_prefix} **** **** {last4:04d}"
 
 
 async def auto_activate_virtual_card(card_id: str, delay: int):
@@ -66,6 +153,7 @@ async def auto_activate_virtual_card(card_id: str, delay: int):
             ))
             await db.commit()
             logger.info(f"Virtual card {card_id} auto-activated after {delay}s")
+
 
 async def get_bank_by_api_key(db, api_key: str) -> BankApiKey | None:
     result = await db.execute(
@@ -185,6 +273,9 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
 
             logger.info(f"Bank {bank.bank_id} authenticated successfully")
 
+            full_pan, masked_pan = await generate_unique_pan(bank.bin_prefix, db)
+            expiry_month, expiry_year = generate_expiry()
+            cvv = generate_cvv(full_pan, expiry_month, expiry_year)
 
             card = Card(
                 id=uuid.uuid4(),
@@ -192,7 +283,10 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 account_id=request.account_id,
                 bank_id=bank.bank_id,
                 token=generate_token(),
-                masked_pan=generate_masked_pan(bank.bin_prefix),
+                masked_pan=masked_pan,
+                pan_encrypted=encrypt_pan(full_pan),
+                expiry_month=expiry_month,
+                expiry_year=expiry_year,
                 card_type=CardType(request.card_type),
                 status=CardStatus.REQUESTED,
                 balance=float(request.initial_balance) if request.card_type == "PREPAID" else 0,
@@ -222,6 +316,10 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             return card_pb2.CreateCardResponse(
                 card_token=card.token,
                 masked_pan=card.masked_pan,
+                full_pan=full_pan,
+                cvv=cvv,
+                expiry_month=expiry_month,
+                expiry_year=expiry_year,
                 status=card.status.value,
                 card_type=card.card_type.value,
                 bank_id=bank.bank_id,
@@ -242,6 +340,8 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 daily_limit=float(card.daily_limit),
                 masked_pan=card.masked_pan,
                 bank_id=card.bank_id,
+                expiry_month=card.expiry_month,
+                expiry_year=card.expiry_year,
             )
 
     async def ListCards(self, request, context):
@@ -257,6 +357,8 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                     daily_limit=float(c.daily_limit),
                     masked_pan=c.masked_pan,
                     bank_id=c.bank_id,
+                    expiry_month=c.expiry_month,
+                    expiry_year=c.expiry_year,
                 ) for c in cards
             ])
 
@@ -394,6 +496,28 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             ))
             await db.commit()
             return card_pb2.UnblockCardResponse(success=True, message="Card unblocked")
+
+    async def GetFullPan(self, request, context):
+        """Zwraca odszyfrowany PAN – tylko dla admina w celach testowych."""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
+            card = result.scalar_one_or_none()
+            if not card:
+                await context.abort(grpc.StatusCode.NOT_FOUND, "Card not found")
+                return
+            if not card.pan_encrypted:
+                await context.abort(grpc.StatusCode.NOT_FOUND, "PAN not available")
+                return
+            full_pan = decrypt_pan(card.pan_encrypted)
+            cvv = generate_cvv(full_pan, card.expiry_month, card.expiry_year)
+            return card_pb2.FullPanResponse(
+                card_token=card.token,
+                full_pan=full_pan,
+                masked_pan=card.masked_pan,
+                cvv=cvv,
+                expiry_month=card.expiry_month,
+                expiry_year=card.expiry_year,
+            )
 
 
 async def serve():
