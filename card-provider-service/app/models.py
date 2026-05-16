@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import Column, String, Enum, Numeric, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, Enum, Numeric, DateTime, ForeignKey, Boolean, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
@@ -32,18 +32,21 @@ class TransactionStatus(str, enum.Enum):
 
 class Card(Base):
     __tablename__ = "cards"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(String, nullable=False)
-    account_id = Column(String, nullable=False)
-    token = Column(String, unique=True, nullable=False)
-    masked_pan = Column(String, nullable=False)
-    card_type = Column(Enum(CardType), nullable=False)
-    status = Column(Enum(CardStatus), nullable=False, default=CardStatus.ACTIVE)
-    balance = Column(Numeric(12, 2), default=0)
-    daily_limit = Column(Numeric(12, 2), default=1000)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    activated_at = Column(DateTime, nullable=True)
-    bank_id = Column(String, nullable=False, default="UNKNOWN")
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id         = Column(String, nullable=False)
+    account_id      = Column(String, nullable=False)
+    bank_id         = Column(String, nullable=False, default="UNKNOWN")
+    token           = Column(String, unique=True, nullable=False)
+    masked_pan      = Column(String, nullable=False)
+    pan_encrypted   = Column(String, nullable=True)   # AES-256 zaszyfrowany PAN
+    expiry_month    = Column(Integer, nullable=False, default=0)
+    expiry_year     = Column(Integer, nullable=False, default=0)
+    card_type       = Column(Enum(CardType), nullable=False)
+    status          = Column(Enum(CardStatus), nullable=False, default=CardStatus.REQUESTED)
+    balance         = Column(Numeric(12, 2), default=0)
+    daily_limit     = Column(Numeric(12, 2), default=1000)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    activated_at    = Column(DateTime, nullable=True)
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -90,7 +93,7 @@ class BankApiKey(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     bank_id = Column(String, unique=True, nullable=False)
     api_key = Column(String, unique=True, nullable=False)
-    bin_prefix = Column(String(4), nullable=False)
+    bin_prefix = Column(String(6), nullable=False)
     currency = Column(String(3), nullable=False)
     is_active = Column(Boolean, default=True)
     hmac_secret = Column(String, nullable=False)

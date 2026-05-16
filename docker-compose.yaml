@@ -1,16 +1,13 @@
-version: '3.8'
-
 services:
-  # Baza Danych
   postgres-db:
     image: postgres:16-alpine
-    container_name: bank_postgres
+    container_name: cards_postgres
     environment:
       POSTGRES_USER: bank_user
       POSTGRES_PASSWORD: bank_pass
       POSTGRES_DB: cards_db
     ports:
-      - "5433:5432"
+      - "5472:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,35 +15,57 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - cards-network
 
-  # Mikroserwis 1: Card Provider (Issuer)
   card-provider:
     build:
       context: ./card-provider-service
       dockerfile: Dockerfile
-    container_name: card_provider_app
+    container_name: cards_provider_app
     ports:
-      - "50051:50051"  # Port gRPC
+      - "50091:50051"
     environment:
       DATABASE_URL: "postgresql+asyncpg://bank_user:bank_pass@postgres-db/cards_db"
       GRPC_PORT: 50051
       VIRTUAL_CARD_ACTIVATION_DELAY: "60"
+      PAN_ENCRYPTION_KEY: "karty-platnicze-key-2026"
+      CARD_VERIFICATION_KEY: "cvk-secret-key-2026"
     depends_on:
       postgres-db:
         condition: service_healthy
+    networks:
+      - cards-network
 
-  # Mikroserwis 2: Payment Gateway (Acquirer/Terminal)
   payment-gateway:
     build:
       context: ./payment-gateway-service
       dockerfile: Dockerfile
-    container_name: payment_gateway_app
+    container_name: cards_gateway_app
     ports:
-      - "8000:8000"   # Port REST API (Swagger/Terminal)
+      - "8072:8000"
     environment:
       GRPC_SERVER_URL: "card-provider:50051"
+      ADMIN_API_KEY: "admin-secret-key-2026"
     depends_on:
       - card-provider
+    networks:
+      - cards-network
+
+  admin-panel:
+    build:
+      context: ./admin-panel
+    container_name: cards_admin_panel
+    ports:
+      - "3072:3000"
+    depends_on:
+      - payment-gateway
+    networks:
+      - cards-network
+
+networks:
+  cards-network:
+    driver: bridge
 
 volumes:
   postgres_data:
