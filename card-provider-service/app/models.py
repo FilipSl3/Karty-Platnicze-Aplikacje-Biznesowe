@@ -44,7 +44,7 @@ class Card(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     activated_at = Column(DateTime, nullable=True)
     bank_id = Column(String, nullable=False, default="UNKNOWN")
-
+    held_balance = Column(Numeric(12, 2), default=0)
 class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

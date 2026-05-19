@@ -364,15 +364,19 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
 
             # 4. prepaid balance
             if card.card_type == CardType.PREPAID:
-                if float(card.balance) < request.amount:
+                available_balance = (
+                    float(card.balance) - float(card.held_balance)
+                    )
+                if available_balance < request.amount:
                     return card_pb2.AuthorizationResponse(
                         response_code=card_pb2.AuthorizationResponse.INSUFFICIENT_FUNDS,
                         message="Insufficient funds"
                     )
 
                 # blokada środków
-                card.balance = float(card.balance) - request.amount
-
+                card.held_balance = (
+                    float(card.held_balance) + request.amount
+                    )
             # 5. utworzenie transakcji
             authorization_code = generate_authorization_code()
 
