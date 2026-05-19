@@ -502,7 +502,8 @@ async def authorize_payment(body: AuthorizeRequest):
             )
 
             return {
-                "status": response.status,
+                "approved": response.response_code == 0,
+                "response_code": response.response_code,
                 "authorization_code": response.authorization_code,
                 "transaction_id": response.transaction_id,
                 "message": response.message,

@@ -552,6 +552,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 response_code=1,
                 message=str(e)
             )
+        
 async def serve():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
