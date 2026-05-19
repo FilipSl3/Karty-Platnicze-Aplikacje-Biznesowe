@@ -10,7 +10,13 @@ import hashlib
 import time
 import json
 
+
+
+
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
+from app.grpc_client import (
+    authorize_transaction
+)
 
 BANK_HMAC_SECRETS = {
     "bank-key-pl-a": "secret-pl-a-hmac",
@@ -68,7 +74,9 @@ Tylko karty w statusie **ACTIVE** mogą realizować płatności.
     version="1.0.0",
     lifespan=lifespan
 )
-
+@app.on_event("startup")
+async def startup():
+    await authorize_transaction()
 
 # --- Modele requestów ---
 
