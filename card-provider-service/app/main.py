@@ -18,7 +18,7 @@ import base64
 from app import card_pb2_grpc
 import app.card_pb2 as card_pb2
 from app.database import AsyncSessionLocal, engine, Base, BANK_API_KEYS_SEED
-from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey
+from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey, Transaction, TransactionStatus
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -226,7 +226,7 @@ async def seed_bank_api_keys():
         await db.commit()
 
 class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
-
+    
     async def CreateCard(self, request, context):
         """
         Tworzy nową kartę płatniczą.
@@ -496,6 +496,11 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             ))
             await db.commit()
             return card_pb2.UnblockCardResponse(success=True, message="Card unblocked")
+            
+    async def AuthorizeTransaction(self, request, context):
+        """
+        Autoryzacja płatności kartą.
+        """
 
     async def GetFullPan(self, request, context):
         """Zwraca odszyfrowany PAN – tylko dla admina w celach testowych."""
@@ -519,6 +524,89 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 expiry_year=card.expiry_year,
             )
 
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Card).where(
+                    Card.token == request.card_token
+                )
+            )
+
+            card = result.scalar_one_or_none()
+
+            # 1. karta istnieje?
+            if not card:
+                return card_pb2.AuthorizationResponse(
+                    response_code=card_pb2.AuthorizationResponse.DECLINED,
+                    message="Card not found"
+                )
+
+            # 2. karta aktywna?
+            if card.status == CardStatus.BLOCKED:
+                return card_pb2.AuthorizationResponse(
+                    response_code=card_pb2.AuthorizationResponse.CARD_BLOCKED,
+                    message="Card is blocked"
+                )
+
+            if card.status != CardStatus.ACTIVE:
+                return card_pb2.AuthorizationResponse(
+                    response_code=card_pb2.AuthorizationResponse.DECLINED,
+                    message=f"Card status is {card.status.value}"
+                )
+
+            # 3. limit dzienny
+            if request.amount > float(card.daily_limit):
+                return card_pb2.AuthorizationResponse(
+                    response_code=card_pb2.AuthorizationResponse.LIMIT_EXCEEDED,
+                    message="Daily limit exceeded"
+                )
+
+            # 4. prepaid balance
+            if card.card_type == CardType.PREPAID:
+                available_balance = (
+                    float(card.balance) - float(card.held_balance)
+                    )
+                if available_balance < request.amount:
+                    return card_pb2.AuthorizationResponse(
+                        response_code=card_pb2.AuthorizationResponse.INSUFFICIENT_FUNDS,
+                        message="Insufficient funds"
+                    )
+
+                # blokada środków
+                card.held_balance = (
+                    float(card.held_balance) + request.amount
+                    )
+            # 5. utworzenie transakcji
+            authorization_code = generate_authorization_code()
+
+            transaction = Transaction(
+                id=uuid.uuid4(),
+                card_id=card.id,
+                merchant_id=request.merchant_id,
+                merchant_name=request.merchant_name,
+                amount=request.amount,
+                currency=request.currency,
+                status=TransactionStatus.AUTHORIZED,
+                authorization_code=authorization_code,
+                created_at=datetime.utcnow()
+            )
+
+            db.add(transaction)
+            await db.commit()
+            await db.refresh(transaction)
+
+            logger.info(
+                f"Transaction approved: "
+                f"{transaction.id} "
+                f"{request.amount} "
+                f"{request.currency}"
+            )
+
+            return card_pb2.AuthorizationResponse(
+                authorization_code=authorization_code,
+                response_code=card_pb2.AuthorizationResponse.APPROVED,
+                message="Approved",
+                transaction_id=str(transaction.id)
+            )
 
 async def serve():
     async with engine.begin() as conn:

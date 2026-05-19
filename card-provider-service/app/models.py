@@ -32,22 +32,23 @@ class TransactionStatus(str, enum.Enum):
 
 class Card(Base):
     __tablename__ = "cards"
-    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id         = Column(String, nullable=False)
-    account_id      = Column(String, nullable=False)
-    bank_id         = Column(String, nullable=False, default="UNKNOWN")
-    token           = Column(String, unique=True, nullable=False)
-    masked_pan      = Column(String, nullable=False)
     pan_encrypted   = Column(String, nullable=True)   # AES-256 zaszyfrowany PAN
     expiry_month    = Column(Integer, nullable=False, default=0)
     expiry_year     = Column(Integer, nullable=False, default=0)
-    card_type       = Column(Enum(CardType), nullable=False)
     status          = Column(Enum(CardStatus), nullable=False, default=CardStatus.REQUESTED)
     balance         = Column(Numeric(12, 2), default=0)
     daily_limit     = Column(Numeric(12, 2), default=1000)
     created_at      = Column(DateTime, default=datetime.utcnow)
     activated_at    = Column(DateTime, nullable=True)
-
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False)
+    account_id = Column(String, nullable=False)
+    token = Column(String, unique=True, nullable=False)
+    masked_pan = Column(String, nullable=False)
+    card_type = Column(Enum(CardType), nullable=False)
+    activated_at = Column(DateTime, nullable=True)
+    bank_id = Column(String, nullable=False, default="UNKNOWN")
+    held_balance = Column(Numeric(12, 2), default=0)
 class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
