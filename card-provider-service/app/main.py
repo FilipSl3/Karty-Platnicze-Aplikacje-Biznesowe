@@ -496,118 +496,62 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             ))
             await db.commit()
             return card_pb2.UnblockCardResponse(success=True, message="Card unblocked")
-            
+
     async def AuthorizeTransaction(self, request, context):
         """
-        Autoryzacja płatności kartą.
+        Autoryzacja płatności kartą POS.
         """
 
-    async def GetFullPan(self, request, context):
-        """Zwraca odszyfrowany PAN – tylko dla admina w celach testowych."""
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Card).where(Card.token == request.card_token))
-            card = result.scalar_one_or_none()
-            if not card:
-                await context.abort(grpc.StatusCode.NOT_FOUND, "Card not found")
-                return
-            if not card.pan_encrypted:
-                await context.abort(grpc.StatusCode.NOT_FOUND, "PAN not available")
-                return
-            full_pan = decrypt_pan(card.pan_encrypted)
-            cvv = generate_cvv(full_pan, card.expiry_month, card.expiry_year)
-            return card_pb2.FullPanResponse(
-                card_token=card.token,
-                full_pan=full_pan,
-                masked_pan=card.masked_pan,
-                cvv=cvv,
-                expiry_month=card.expiry_month,
-                expiry_year=card.expiry_year,
-            )
+        try:
+            async with AsyncSessionLocal() as db:
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Card).where(
-                    Card.token == request.card_token
-                )
-            )
+                result = await db.execute(select(Card))
+                cards = result.scalars().all()
 
-            card = result.scalar_one_or_none()
+                card = None
+                for c in cards:
+                    full_pan = decrypt_pan(c.pan_encrypted)
 
-            # 1. karta istnieje?
-            if not card:
-                return card_pb2.AuthorizationResponse(
-                    response_code=card_pb2.AuthorizationResponse.DECLINED,
-                    message="Card not found"
-                )
+                    if full_pan == request.card_number:
+                        card = c
+                        break
 
-            # 2. karta aktywna?
-            if card.status == CardStatus.BLOCKED:
-                return card_pb2.AuthorizationResponse(
-                    response_code=card_pb2.AuthorizationResponse.CARD_BLOCKED,
-                    message="Card is blocked"
-                )
-
-            if card.status != CardStatus.ACTIVE:
-                return card_pb2.AuthorizationResponse(
-                    response_code=card_pb2.AuthorizationResponse.DECLINED,
-                    message=f"Card status is {card.status.value}"
-                )
-
-            # 3. limit dzienny
-            if request.amount > float(card.daily_limit):
-                return card_pb2.AuthorizationResponse(
-                    response_code=card_pb2.AuthorizationResponse.LIMIT_EXCEEDED,
-                    message="Daily limit exceeded"
-                )
-
-            # 4. prepaid balance
-            if card.card_type == CardType.PREPAID:
-                available_balance = (
-                    float(card.balance) - float(card.held_balance)
-                    )
-                if available_balance < request.amount:
+                if not card:
                     return card_pb2.AuthorizationResponse(
-                        response_code=card_pb2.AuthorizationResponse.INSUFFICIENT_FUNDS,
-                        message="Insufficient funds"
+                        response_code=1,
+                        message="Card not found"
                     )
 
-                # blokada środków
-                card.held_balance = (
-                    float(card.held_balance) + request.amount
+                full_pan = decrypt_pan(card.pan_encrypted)
+
+                if not verify_cvv(
+                    full_pan,
+                    request.expiry_month,
+                    request.expiry_year,
+                    request.cvv
+                ):
+                    return card_pb2.AuthorizationResponse(
+                        response_code=1,
+                        message="Invalid CVV"
                     )
-            # 5. utworzenie transakcji
-            authorization_code = generate_authorization_code()
 
-            transaction = Transaction(
-                id=uuid.uuid4(),
-                card_id=card.id,
-                merchant_id=request.merchant_id,
-                merchant_name=request.merchant_name,
-                amount=request.amount,
-                currency=request.currency,
-                status=TransactionStatus.AUTHORIZED,
-                authorization_code=authorization_code,
-                created_at=datetime.utcnow()
-            )
+                authorization_code = secrets.token_hex(4).upper()
 
-            db.add(transaction)
-            await db.commit()
-            await db.refresh(transaction)
+                return card_pb2.AuthorizationResponse(
+                    authorization_code=authorization_code,
+                    response_code=0,
+                    message="Approved",
+                    transaction_id="txn_test"
+                )
 
-            logger.info(
-                f"Transaction approved: "
-                f"{transaction.id} "
-                f"{request.amount} "
-                f"{request.currency}"
-            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
 
             return card_pb2.AuthorizationResponse(
-                authorization_code=authorization_code,
-                response_code=card_pb2.AuthorizationResponse.APPROVED,
-                message="Approved",
-                transaction_id=str(transaction.id)
+                response_code=1,
+                message=str(e)
             )
-
 async def serve():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

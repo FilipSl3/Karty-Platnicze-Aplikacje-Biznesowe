@@ -79,11 +79,15 @@ message UnblockCardResponse {
 // --- Transakcje ---
 
 message AuthorizationRequest {
-    string card_token = 1;
-    double amount = 2;
-    string currency = 3;
-    string merchant_id = 4;
-    string merchant_name = 5;
+    string card_number = 1;
+    int32 expiry_month = 2;
+    int32 expiry_year = 3;
+    string cvv = 4;
+
+    double amount = 5;
+    string currency = 6;
+    string merchant_id = 7;
+    string merchant_name = 8;
 }
 
 message AuthorizationResponse {

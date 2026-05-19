@@ -46,6 +46,27 @@ def generate_hmac_signature(body: dict, secret: str) -> tuple[str, str]:
     ).hexdigest()
     return signature, timestamp
 
+
+def validate_luhn(card_number: str) -> bool:
+    card_number = card_number.replace(" ", "")
+
+    if not card_number.isdigit():
+        return False
+
+    digits = [int(d) for d in card_number]
+    checksum = 0
+    parity = len(digits) % 2
+
+    for i, digit in enumerate(digits):
+        if i % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        checksum += digit
+
+    return checksum % 10 == 0
+
+
 def verify_admin_key(x_admin_key: str = Header(None, alias="X-Admin-Key")):
     if x_admin_key != ADMIN_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid admin key")
@@ -74,9 +95,7 @@ Tylko karty w statusie **ACTIVE** mogą realizować płatności.
     version="1.0.0",
     lifespan=lifespan
 )
-@app.on_event("startup")
-async def startup():
-    await authorize_transaction()
+
 
 # --- Modele requestów ---
 
@@ -422,7 +441,7 @@ async def get_full_pan(
     """
     Zwraca odszyfrowany PAN, CVV i datę ważności.
 
-    ⚠️ **Tylko dla admina i celów testowych.**
+     **Tylko dla admina i celów testowych.**
     Wymaga nagłówka `X-Admin-Key`.
     """
     try:
@@ -441,3 +460,62 @@ async def get_full_pan(
             }
     except Exception as e:
         raise HTTPException(status_code=404, detail="Card not found")
+@app.post(
+    "/api/v1/payments/authorize",
+    tags=["Płatności"],
+    summary="Autoryzacja płatności kartą (POS Terminal)"
+)
+async def authorize_payment(body: AuthorizeRequest):
+    """
+    Symuluje terminal płatniczy POS.
+
+    Flow:
+    1. Walidacja numeru karty (Luhn)
+    2. Wywołanie gRPC do Card Provider
+    3. Zwrot decyzji APPROVED / DECLINED
+    """
+
+    card_number = body.card_number.replace(" ", "")
+
+    # Luhn validation
+    if not validate_luhn(card_number):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid card number (Luhn failed)"
+        )
+
+    try:
+        async with grpc.aio.insecure_channel(GRPC_URL) as channel:
+            stub = card_pb2_grpc.CardProviderStub(channel)
+
+            response = await stub.AuthorizeTransaction(
+                card_pb2.AuthorizationRequest(
+                    card_number=card_number,
+                    expiry_month=body.expiry_month,
+                    expiry_year=body.expiry_year,
+                    cvv=body.cvv,
+                    amount=body.amount,
+                    currency=body.currency,
+                    merchant_id=body.merchant_id,
+                    merchant_name=body.merchant_name,
+                )
+            )
+
+            return {
+                "status": response.status,
+                "authorization_code": response.authorization_code,
+                "transaction_id": response.transaction_id,
+                "message": response.message,
+            }
+
+    except grpc.RpcError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"gRPC error: {e.details()}"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
