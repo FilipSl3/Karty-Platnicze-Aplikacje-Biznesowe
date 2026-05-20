@@ -11,7 +11,7 @@ import time
 import json
 from iso8583 import encode, decode
 from app.iso_spec import spec
-
+from app.iso_socket_client import send_iso
 
 
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
@@ -500,11 +500,18 @@ async def authorize_payment(body: AuthorizeRequest):
             print(encoded)
             print(raw_iso)
 
-            response = await stub.ProcessIsoMessage(
-                card_pb2.IsoRequest(
-                    payload=bytes(raw_iso)
+            decoded = await send_iso(raw_iso)
+
+            return {
+                "approved": decoded["39"] == "00",
+                "response_code": decoded["39"],
+                "authorization_code": decoded.get("38", ""),
+                "message": (
+                    "Approved"
+                    if decoded["39"] == "00"
+                    else "Declined"
                 )
-            )
+            }
 
             print("RAW RESPONSE:")
             print(response.payload)

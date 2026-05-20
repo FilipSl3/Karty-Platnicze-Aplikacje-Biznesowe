@@ -8,6 +8,7 @@ services:
       POSTGRES_DB: cards_db
     ports:
       - "5472:5432"
+      - "9000:9000"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

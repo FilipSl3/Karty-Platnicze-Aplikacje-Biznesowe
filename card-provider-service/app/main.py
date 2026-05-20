@@ -640,5 +640,26 @@ async def serve():
     await server.wait_for_termination()
 
 
+from app.iso_socket_server import start_socket_server
+
+
+async def run_all():
+    await asyncio.gather(
+        serve(),
+        start_socket_server()
+    )
+
+
 if __name__ == '__main__':
-    asyncio.run(serve())
+    asyncio.run(run_all())
+#
+#{
+#  "card_number": "4100013395241296",
+#  "expiry_month": 5,
+#  "expiry_year": 29,
+#  "cvv": "889",
+#  "amount": 50,
+#  "currency": "PLN",
+#  "merchant_id": "SHOP_001",
+#  "merchant_name": "Zabka"
+#}
