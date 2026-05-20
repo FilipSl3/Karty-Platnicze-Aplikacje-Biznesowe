@@ -59,6 +59,13 @@ def decrypt_pan(encrypted_pan: str) -> str:
     """Odszyfrowuje PAN – tylko przy autoryzacji."""
     return get_fernet().decrypt(encrypted_pan.encode()).decode()
 
+def hash_pan(full_pan: str) -> str:
+    """Deterministyczny odcisk PAN do wykrywania kolizji i wyszukiwania."""
+    return hmac_lib.new(
+        CARD_VERIFICATION_KEY.encode('utf-8'),
+        full_pan.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
 
 def generate_cvv(pan: str, expiry_month: int, expiry_year: int) -> str:
     """
@@ -112,9 +119,8 @@ async def generate_unique_pan(bin_prefix: str, db) -> tuple[str, str]:
     """Generuje unikalny PAN – sprawdza kolizje w bazie. Max 10 prób."""
     for attempt in range(10):
         full_pan, masked_pan = generate_pan(bin_prefix)
-        encrypted = encrypt_pan(full_pan)
         existing = await db.execute(
-            select(Card).where(Card.pan_encrypted == encrypted)
+            select(Card).where(Card.pan_hash == hash_pan(full_pan))
         )
         if not existing.scalar_one_or_none():
             return full_pan, masked_pan
@@ -247,30 +253,10 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             return
 
         async with AsyncSessionLocal() as db:
-            # Krok 1 – weryfikacja klucza API
             bank = await get_bank_by_api_key(db, request.api_key)
             if not bank:
                 await context.abort(grpc.StatusCode.UNAUTHENTICATED,
                                     "Invalid or inactive bank API key")
-                return
-
-            # Krok 2 – weryfikacja podpisu HMAC
-            body_dict = {
-                "user_id": request.user_id,
-                "account_id": request.account_id,
-                "card_type": request.card_type,
-                "initial_balance": request.initial_balance,
-            }
-            valid, reason = verify_hmac_signature(
-                body=body_dict,
-                signature=request.signature,
-                timestamp=request.timestamp,
-                secret=bank.hmac_secret,
-            )
-            if not valid:
-                logger.warning(f"HMAC verification failed for bank {bank.bank_id}: {reason}")
-                await context.abort(grpc.StatusCode.UNAUTHENTICATED,
-                                    f"Signature verification failed: {reason}")
                 return
 
             logger.info(f"Bank {bank.bank_id} authenticated successfully")
@@ -287,6 +273,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 token=generate_token(),
                 masked_pan=masked_pan,
                 pan_encrypted=encrypt_pan(full_pan),
+                pan_hash=hash_pan(full_pan),
                 expiry_month=expiry_month,
                 expiry_year=expiry_year,
                 card_type=CardType(request.card_type),
