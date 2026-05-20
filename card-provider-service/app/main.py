@@ -19,6 +19,8 @@ from app import card_pb2_grpc
 import app.card_pb2 as card_pb2
 from app.database import AsyncSessionLocal, engine, Base, BANK_API_KEYS_SEED
 from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey, Transaction, TransactionStatus
+from iso8583 import encode, decode
+from app.iso_spec import spec
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -552,6 +554,79 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 response_code=1,
                 message=str(e)
             )
+    async def ProcessIsoMessage(self, request, context):
+
+        decoded, _ = decode(
+            bytes(request.payload),
+            spec
+        )
+
+        card_number = decoded["2"]
+
+        amount = int(decoded["4"]) / 100
+
+        expiry = decoded["14"]
+        expiry_month = int(expiry[:2])
+        expiry_year = int(expiry[2:])
+
+        cvv = decoded["52"]
+
+        async with AsyncSessionLocal() as db:
+
+            result = await db.execute(select(Card))
+            cards = result.scalars().all()
+
+            card = None
+
+            for c in cards:
+                full_pan = decrypt_pan(c.pan_encrypted)
+
+                if full_pan == card_number:
+                    card = c
+                    break
+
+            # karta nie istnieje
+            if not card:
+                response_code = "05"
+
+            else:
+                full_pan = decrypt_pan(card.pan_encrypted)
+
+                # CVV
+                if not verify_cvv(
+                    full_pan,
+                    expiry_month,
+                    expiry_year,
+                    cvv
+                ):
+                    response_code = "05"
+
+                # expiry
+                elif (
+                    card.expiry_month != expiry_month or
+                    card.expiry_year != expiry_year
+                ):
+                    response_code = "54"
+
+                # status
+                elif card.status != CardStatus.ACTIVE:
+                    response_code = "05"
+
+                # approved
+                else:
+                    response_code = "00"
+
+        response_iso = {
+            "t": "0110",
+            "39": response_code,
+            "38": secrets.token_hex(3).upper()
+        }
+
+        raw_response, _ = encode(response_iso, spec)
+
+        return card_pb2.IsoResponse(
+            payload=bytes(raw_response)
+        )
         
 async def serve():
     async with engine.begin() as conn:

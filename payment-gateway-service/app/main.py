@@ -9,7 +9,8 @@ import hmac as hmac_lib
 import hashlib
 import time
 import json
-
+from iso8583 import encode, decode
+from app.iso_spec import spec
 
 
 
@@ -465,19 +466,11 @@ async def get_full_pan(
     tags=["Płatności"],
     summary="Autoryzacja płatności kartą (POS Terminal)"
 )
-async def authorize_payment(body: AuthorizeRequest):
-    """
-    Symuluje terminal płatniczy POS.
 
-    Flow:
-    1. Walidacja numeru karty (Luhn)
-    2. Wywołanie gRPC do Card Provider
-    3. Zwrot decyzji APPROVED / DECLINED
-    """
+async def authorize_payment(body: AuthorizeRequest):
 
     card_number = body.card_number.replace(" ", "")
 
-    # Luhn validation
     if not validate_luhn(card_number):
         raise HTTPException(
             status_code=400,
@@ -486,27 +479,53 @@ async def authorize_payment(body: AuthorizeRequest):
 
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
+
             stub = card_pb2_grpc.CardProviderStub(channel)
 
-            response = await stub.AuthorizeTransaction(
-                card_pb2.AuthorizationRequest(
-                    card_number=card_number,
-                    expiry_month=body.expiry_month,
-                    expiry_year=body.expiry_year,
-                    cvv=body.cvv,
-                    amount=body.amount,
-                    currency=body.currency,
-                    merchant_id=body.merchant_id,
-                    merchant_name=body.merchant_name,
+            iso_message = {
+                "t": "0100",
+                "2": card_number,
+                "4": str(int(body.amount * 100)).zfill(12),
+                "14": f"{body.expiry_month:02d}{body.expiry_year:02d}",
+                "41": "POS00001".ljust(8),
+                "42": body.merchant_id[:15].ljust(15),
+                "49": body.currency,
+                "52": body.cvv,
+            }
+
+            raw_iso, encoded = encode(iso_message, spec)
+
+            print("========== GATEWAY ISO ==========")
+            print(iso_message)
+            print(encoded)
+            print(raw_iso)
+
+            response = await stub.ProcessIsoMessage(
+                card_pb2.IsoRequest(
+                    payload=bytes(raw_iso)
                 )
             )
 
+            print("RAW RESPONSE:")
+            print(response.payload)
+
+            decoded, encoded = decode(
+                bytes(response.payload),
+                spec
+            )
+
+            print("DECODED:")
+            print(decoded)
+
             return {
-                "approved": response.response_code == 0,
-                "response_code": response.response_code,
-                "authorization_code": response.authorization_code,
-                "transaction_id": response.transaction_id,
-                "message": response.message,
+                "approved": decoded["39"] == "00",
+                "response_code": decoded["39"],
+                "authorization_code": decoded.get("38", ""),
+                "message": (
+                    "Approved"
+                    if decoded["39"] == "00"
+                    else "Declined"
+                )
             }
 
     except grpc.RpcError as e:
