@@ -5,3 +5,4 @@ grpcio-tools
 protobuf
 pydantic
 python-dotenv
+pyiso8583

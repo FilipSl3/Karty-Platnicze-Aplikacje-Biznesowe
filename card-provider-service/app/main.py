@@ -18,7 +18,9 @@ import base64
 from app import card_pb2_grpc
 import app.card_pb2 as card_pb2
 from app.database import AsyncSessionLocal, engine, Base, BANK_API_KEYS_SEED
-from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey
+from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey, Transaction, TransactionStatus
+from iso8583 import encode, decode
+from app.iso_spec import spec
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -226,7 +228,7 @@ async def seed_bank_api_keys():
         await db.commit()
 
 class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
-
+    
     async def CreateCard(self, request, context):
         """
         Tworzy nową kartę płatniczą.
@@ -497,6 +499,135 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             await db.commit()
             return card_pb2.UnblockCardResponse(success=True, message="Card unblocked")
 
+    async def AuthorizeTransaction(self, request, context):
+        """
+        Autoryzacja płatności kartą POS.
+        """
+
+        try:
+            async with AsyncSessionLocal() as db:
+
+                result = await db.execute(select(Card))
+                cards = result.scalars().all()
+
+                card = None
+                for c in cards:
+                    full_pan = decrypt_pan(c.pan_encrypted)
+
+                    if full_pan == request.card_number:
+                        card = c
+                        break
+
+                if not card:
+                    return card_pb2.AuthorizationResponse(
+                        response_code=1,
+                        message="Card not found"
+                    )
+
+                full_pan = decrypt_pan(card.pan_encrypted)
+
+                if not verify_cvv(
+                    full_pan,
+                    request.expiry_month,
+                    request.expiry_year,
+                    request.cvv
+                ):
+                    return card_pb2.AuthorizationResponse(
+                        response_code=1,
+                        message="Invalid CVV"
+                    )
+
+                authorization_code = secrets.token_hex(4).upper()
+
+                return card_pb2.AuthorizationResponse(
+                    authorization_code=authorization_code,
+                    response_code=0,
+                    message="Approved",
+                    transaction_id="txn_test"
+                )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+            return card_pb2.AuthorizationResponse(
+                response_code=1,
+                message=str(e)
+            )
+    async def ProcessIsoMessage(self, request, context):
+
+        decoded, _ = decode(
+            bytes(request.payload),
+            spec
+        )
+
+        card_number = decoded["2"]
+
+        amount = int(decoded["4"]) / 100
+
+        expiry = decoded["14"]
+        expiry_month = int(expiry[:2])
+        expiry_year = int(expiry[2:])
+
+        cvv = decoded["52"]
+
+        async with AsyncSessionLocal() as db:
+
+            result = await db.execute(select(Card))
+            cards = result.scalars().all()
+
+            card = None
+
+            for c in cards:
+                full_pan = decrypt_pan(c.pan_encrypted)
+
+                if full_pan == card_number:
+                    card = c
+                    break
+
+            # karta nie istnieje
+            if not card:
+                response_code = "05"
+
+            else:
+                full_pan = decrypt_pan(card.pan_encrypted)
+
+                # CVV
+                if not verify_cvv(
+                    full_pan,
+                    expiry_month,
+                    expiry_year,
+                    cvv
+                ):
+                    response_code = "05"
+
+                # expiry
+                elif (
+                    card.expiry_month != expiry_month or
+                    card.expiry_year != expiry_year
+                ):
+                    response_code = "54"
+
+                # status
+                elif card.status != CardStatus.ACTIVE:
+                    response_code = "05"
+
+                # approved
+                else:
+                    response_code = "00"
+
+        response_iso = {
+            "t": "0110",
+            "39": response_code,
+            "38": secrets.token_hex(3).upper()
+        }
+
+        raw_response, _ = encode(response_iso, spec)
+
+        return card_pb2.IsoResponse(
+            payload=bytes(raw_response)
+        )
+
     async def GetFullPan(self, request, context):
         """Zwraca odszyfrowany PAN – tylko dla admina w celach testowych."""
         async with AsyncSessionLocal() as db:
@@ -519,7 +650,6 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 expiry_year=card.expiry_year,
             )
 
-
 async def serve():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -532,5 +662,26 @@ async def serve():
     await server.wait_for_termination()
 
 
+from app.iso_socket_server import start_socket_server
+
+
+async def run_all():
+    await asyncio.gather(
+        serve(),
+        start_socket_server()
+    )
+
+
 if __name__ == '__main__':
-    asyncio.run(serve())
+    asyncio.run(run_all())
+#
+#{
+#  "card_number": "4100013395241296",
+#  "expiry_month": 5,
+#  "expiry_year": 29,
+#  "cvv": "889",
+#  "amount": 50,
+#  "currency": "PLN",
+#  "merchant_id": "SHOP_001",
+#  "merchant_name": "Zabka"
+#}

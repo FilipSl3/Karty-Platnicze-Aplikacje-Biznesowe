@@ -10,3 +10,4 @@ asyncpg
 alembic==1.14.0
 psycopg2-binary
 cryptography
+pyiso8583

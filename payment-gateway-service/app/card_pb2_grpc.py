@@ -94,6 +94,11 @@ class CardProviderStub(object):
                 request_serializer=card__pb2.GetCardRequest.SerializeToString,
                 response_deserializer=card__pb2.FullPanResponse.FromString,
                 _registered_method=True)
+        self.ProcessIsoMessage = channel.unary_unary(
+                '/cardprovider.CardProvider/ProcessIsoMessage',
+                request_serializer=card__pb2.IsoRequest.SerializeToString,
+                response_deserializer=card__pb2.IsoResponse.FromString,
+                _registered_method=True)
 
 
 class CardProviderServicer(object):
@@ -171,6 +176,12 @@ class CardProviderServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ProcessIsoMessage(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_CardProviderServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -233,6 +244,11 @@ def add_CardProviderServicer_to_server(servicer, server):
                     servicer.GetFullPan,
                     request_deserializer=card__pb2.GetCardRequest.FromString,
                     response_serializer=card__pb2.FullPanResponse.SerializeToString,
+            ),
+            'ProcessIsoMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.ProcessIsoMessage,
+                    request_deserializer=card__pb2.IsoRequest.FromString,
+                    response_serializer=card__pb2.IsoResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -559,6 +575,33 @@ class CardProvider(object):
             '/cardprovider.CardProvider/GetFullPan',
             card__pb2.GetCardRequest.SerializeToString,
             card__pb2.FullPanResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ProcessIsoMessage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cardprovider.CardProvider/ProcessIsoMessage',
+            card__pb2.IsoRequest.SerializeToString,
+            card__pb2.IsoResponse.FromString,
             options,
             channel_credentials,
             insecure,

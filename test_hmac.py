@@ -1,14 +1,13 @@
-# test_hmac.py
 import hmac
 import hashlib
 import time
 import json
 import requests
 
-# Dane banku (z naszego seeda)
-API_KEY = "bank-key-pl-b"
-HMAC_SECRET = "secret-pl-b-hmac"
+API_KEY = "bank-key-pl-a"
+HMAC_SECRET = "secret-pl-a-hmac"
 BASE_URL = "http://localhost:8072"
+
 
 def generate_signature(body: dict, secret: str) -> tuple[str, str]:
     timestamp = str(int(time.time()))
@@ -44,6 +43,8 @@ def test_issue_card(card_type: str, initial_balance: float = 0):
         headers={
             "Content-Type": "application/json",
             "X-API-Key": API_KEY,
+            "X-Signature": signature,
+            "X-Timestamp": timestamp,
         },
         json=body
     )
@@ -65,11 +66,15 @@ def test_invalid_api_key():
         "initial_balance": 0,
     }
 
+    signature, timestamp = generate_signature(body, "jakis-losowy-sekret")
+
     response = requests.post(
         f"{BASE_URL}/api/v1/cards/issue",
         headers={
             "Content-Type": "application/json",
             "X-API-Key": "zly-klucz-hakera",
+            "X-Signature": signature,
+            "X-Timestamp": timestamp,
         },
         json=body
     )
@@ -80,7 +85,7 @@ def test_invalid_api_key():
 
 def test_wrong_signature():
     print(f"\n{'='*50}")
-    print("TEST: Prawidłowy klucz, zły podpis (atak)")
+    print("TEST: Prawidłowy klucz API, zły podpis HMAC")
     print('='*50)
 
     body = {
@@ -90,18 +95,16 @@ def test_wrong_signature():
         "initial_balance": 999999,
     }
 
-    # Haker ma klucz API ale nie ma sekretu - generuje losowy podpis
     timestamp = str(int(time.time()))
     fake_signature = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
 
-    # Haker musi jakoś przekazać signature i timestamp - ale w naszym przypadku
-    # te dane idą przez gRPC wewnętrznie, więc ten test pokazuje
-    # że sam api_key bez sekretu nie wystarczy
     response = requests.post(
         f"{BASE_URL}/api/v1/cards/issue",
         headers={
             "Content-Type": "application/json",
-            "X-API-Key": "zly-klucz",  # nie ma sekretu → 401 zanim dojdzie do HMAC
+            "X-API-Key": API_KEY,
+            "X-Signature": fake_signature,
+            "X-Timestamp": timestamp,
         },
         json=body
     )
@@ -110,14 +113,49 @@ def test_wrong_signature():
     print(f"Response:   {response.json()}")
 
 
-def test_replay_attack(card_token: str):
-    """Symuluje replay attack - używa starego tokena"""
+def test_replay_attack():
     print(f"\n{'='*50}")
-    print("TEST: Sprawdzenie karty (zwykłe GET)")
+    print("TEST: Replay attack – stary timestamp (>30s)")
+    print('='*50)
+
+    body = {
+        "user_id": "haker",
+        "account_id": "haker_acc",
+        "card_type": "VIRTUAL",
+        "initial_balance": 0,
+    }
+
+    old_timestamp = str(int(time.time()) - 60)
+    body_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
+    payload = old_timestamp + body_json
+    old_signature = hmac.new(
+        HMAC_SECRET.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+
+    response = requests.post(
+        f"{BASE_URL}/api/v1/cards/issue",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": API_KEY,
+            "X-Signature": old_signature,
+            "X-Timestamp": old_timestamp,
+        },
+        json=body
+    )
+
+    print(f"Status:     {response.status_code} (oczekiwany: 401)")
+    print(f"Response:   {response.json()}")
+
+
+def test_get_card(card_token: str):
+    print(f"\n{'='*50}")
+    print("TEST: Sprawdzenie karty (GET)")
     print('='*50)
 
     if not card_token:
-        print("Brak tokenu – pomiń ten test")
+        print("Brak tokenu – pomiń")
         return
 
     response = requests.get(f"{BASE_URL}/api/v1/cards/{card_token}")
@@ -129,23 +167,13 @@ if __name__ == "__main__":
     print("START TESTÓW BEZPIECZEŃSTWA")
     print("="*50)
 
-    # Test 1 – poprawne wydanie karty wirtualnej
     token = test_issue_card("VIRTUAL")
-
-    # Test 2 – poprawne wydanie karty fizycznej
     test_issue_card("PHYSICAL")
-
-    # Test 3 – poprawne wydanie karty prepaid
     test_issue_card("PREPAID", initial_balance=500)
-
-    # Test 4 – nieprawidłowy klucz API
     test_invalid_api_key()
-
-    # Test 5 – zły podpis
     test_wrong_signature()
-
-    # Test 6 – sprawdzenie wydanej karty
-    test_replay_attack(token)
+    test_replay_attack()
+    test_get_card(token)
 
     print(f"\n{'='*50}")
     print("KONIEC TESTÓW")
