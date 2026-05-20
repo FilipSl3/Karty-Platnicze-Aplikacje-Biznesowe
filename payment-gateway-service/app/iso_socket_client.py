@@ -1,6 +1,6 @@
+import asyncio
 from iso8583 import decode
 from app.iso_spec import spec
-import asyncio
 
 HOST = "card-provider"
 PORT = 9000
@@ -13,10 +13,28 @@ async def send_iso(raw_iso):
         PORT
     )
 
-    writer.write(bytes(raw_iso))
+    # payload
+    payload = bytes(raw_iso)
+
+    # 4 bajty długości
+    length = len(payload).to_bytes(4, "big")
+
+    # send
+    writer.write(length + payload)
     await writer.drain()
 
-    response = await reader.read(4096)
+    # read response length
+    length_bytes = await reader.readexactly(4)
+
+    response_length = int.from_bytes(
+        length_bytes,
+        "big"
+    )
+
+    # read exact response size
+    response = await reader.readexactly(
+        response_length
+    )
 
     writer.close()
     await writer.wait_closed()

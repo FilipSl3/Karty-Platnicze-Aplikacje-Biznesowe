@@ -82,7 +82,18 @@ def verify_cvv(
 async def handle_client(reader, writer):
 
     try:
-        data = await reader.read(4096)
+        # najpierw długość wiadomości
+        length_bytes = await reader.readexactly(4)
+
+        message_length = int.from_bytes(
+            length_bytes,
+            "big"
+        )
+
+        
+        data = await reader.readexactly(
+            message_length
+        )
 
         print("RAW SOCKET DATA:", data)
 
@@ -140,7 +151,17 @@ async def handle_client(reader, writer):
 
         raw_response, _ = encode(response_iso, spec)
 
-        writer.write(bytes(raw_response))
+        response_payload = bytes(raw_response)
+
+        response_length = len(
+            response_payload
+        ).to_bytes(4, "big")
+
+        writer.write(
+            response_length +
+            response_payload
+        )
+
         await writer.drain()
 
     except Exception as e:
