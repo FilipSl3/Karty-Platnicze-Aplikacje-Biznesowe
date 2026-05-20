@@ -1,7 +1,7 @@
 # payment-gateway-service/app/main.py
 import os
 import grpc
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from app import card_pb2, card_pb2_grpc
@@ -12,6 +12,7 @@ import json
 from iso8583 import encode, decode
 from app.iso_spec import spec
 from app.iso_socket_client import send_iso
+
 
 
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
@@ -31,12 +32,40 @@ BANK_HMAC_SECRETS = {
 }
 
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "admin-secret-key-2026")
+SIGNATURE_MAX_AGE_SECONDS = 30
+
+
+def verify_bank_signature(body: dict, signature: str, timestamp: str, secret: str) -> tuple[bool, str]:
+    """Weryfikuje podpis HMAC-SHA256 przysłany przez bank."""
+    try:
+        ts = int(timestamp)
+    except (ValueError, TypeError):
+        return False, "Invalid timestamp format"
+
+    age = abs(time.time() - ts)
+    if age > SIGNATURE_MAX_AGE_SECONDS:
+        return False, f"Request expired ({int(age)}s old, max {SIGNATURE_MAX_AGE_SECONDS}s)"
+
+    try:
+        body_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
+    except Exception:
+        return False, "Failed to serialize body"
+
+    payload = timestamp + body_json
+    expected = hmac_lib.new(
+        secret.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+
+    if not hmac_lib.compare_digest(expected, signature):
+        return False, "Invalid signature"
+
+    return True, ""
+
 
 def generate_hmac_signature(body: dict, secret: str) -> tuple[str, str]:
-    """
-    Generuje podpis HMAC-SHA256 dla żądania.
-    Używane przez Payment Gateway przed przekazaniem do Card Provider.
-    """
+    """Generuje podpis HMAC-SHA256 – używane tylko w test-connection."""
     timestamp = str(int(time.time()))
     body_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
     payload = timestamp + body_json
@@ -50,21 +79,17 @@ def generate_hmac_signature(body: dict, secret: str) -> tuple[str, str]:
 
 def validate_luhn(card_number: str) -> bool:
     card_number = card_number.replace(" ", "")
-
     if not card_number.isdigit():
         return False
-
     digits = [int(d) for d in card_number]
     checksum = 0
     parity = len(digits) % 2
-
     for i, digit in enumerate(digits):
         if i % 2 == parity:
             digit *= 2
             if digit > 9:
                 digit -= 9
         checksum += digit
-
     return checksum % 10 == 0
 
 
@@ -72,6 +97,7 @@ def verify_admin_key(x_admin_key: str = Header(None, alias="X-Admin-Key")):
     if x_admin_key != ADMIN_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid admin key")
     return x_admin_key
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -90,6 +116,12 @@ app = FastAPI(
 ### Karta wirtualna:
 `REQUESTED → (auto po max 1h) → ACTIVE`
 
+### Uwierzytelnianie banków:
+Każde żądanie banku musi zawierać:
+- `X-API-Key` – klucz API banku
+- `X-Signature` – podpis HMAC-SHA256 body + timestamp (generowany przez bank)
+- `X-Timestamp` – Unix timestamp (żądanie ważne 30s)
+
 ### Ważne:
 Tylko karty w statusie **ACTIVE** mogą realizować płatności.
     """,
@@ -103,17 +135,17 @@ Tylko karty w statusie **ACTIVE** mogą realizować płatności.
 class IssueCardRequest(BaseModel):
     user_id: str
     account_id: str
-    card_type: str  # VIRTUAL | PHYSICAL | PREPAID
+    card_type: str
     initial_balance: float = 0.0
 
 
 class CardStatusRequest(BaseModel):
-    status: str  # BLOCKED | ACTIVE
+    status: str
     reason: str = ""
 
 
 class UpdateLifecycleRequest(BaseModel):
-    new_status: str  # PRODUCING | SHIPPED
+    new_status: str
     changed_by: str = "bank_operator"
 
 
@@ -146,7 +178,7 @@ async def root():
 
 @app.post("/test-connection", tags=["System"])
 async def test_grpc():
-    """Testuje połączenie gRPC z Card Provider."""
+    """Testuje połączenie gRPC z Card Provider. Używa bank-key-pl-a."""
     try:
         test_api_key = "bank-key-pl-a"
         hmac_secret = BANK_HMAC_SECRETS[test_api_key]
@@ -157,7 +189,6 @@ async def test_grpc():
             "initial_balance": 0.0,
         }
         signature, timestamp = generate_hmac_signature(body_dict, hmac_secret)
-
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
             stub = card_pb2_grpc.CardProviderStub(channel)
             response = await stub.CreateCard(card_pb2.CreateCardRequest(
@@ -183,12 +214,10 @@ async def test_grpc():
 # --- Karty ---
 
 @app.get("/api/v1/cards", tags=["Karty"], summary="Lista wszystkich kart")
-async def list_cards(
-    admin_key: str = Depends(verify_admin_key)
-):
+async def list_cards(_: str = Depends(verify_admin_key)):
     """
     Lista wszystkich kart w systemie.
-    **Wymaga nagłówka X-Admin-Key** – tylko dla operatorów Card Provider.
+    **Wymaga nagłówka X-Admin-Key.**
     """
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
@@ -211,8 +240,11 @@ async def list_cards(
 
 @app.post("/api/v1/cards/issue", tags=["Karty"], summary="Wydaj nową kartę")
 async def issue_card(
+    request: Request,
     body: IssueCardRequest,
     x_api_key: str = Header(..., alias="X-API-Key"),
+    x_signature: str = Header(..., alias="X-Signature"),
+    x_timestamp: str = Header(..., alias="X-Timestamp"),
 ):
     """
     Wydaje nową kartę płatniczą dla klienta banku.
@@ -221,14 +253,15 @@ async def issue_card(
     - **PHYSICAL** – startuje jako REQUESTED, wymaga przejścia przez cykl produkcji
     - **PREPAID** – startuje jako REQUESTED, posiada własne saldo (initial_balance)
 
-    Karta **nie może** być używana do płatności dopóki nie osiągnie statusu **ACTIVE**.
-
     **Wymagane nagłówki:**
-    - `X-API-Key` – klucz API banku (np. `bank-key-pl-a`)
+    - `X-API-Key` – klucz API banku
+    - `X-Signature` – podpis HMAC-SHA256 wygenerowany przez bank
+    - `X-Timestamp` – Unix timestamp (żądanie ważne 30s)
 
     **Bezpieczeństwo:**
-    - Żądanie podpisywane HMAC-SHA256 przed przekazaniem do Card Provider
-    - Timestamp chroni przed replay attacks (żądanie ważne 30s)
+    - Bank sam generuje podpis HMAC-SHA256 ze swoim sekretem
+    - Payment Gateway weryfikuje podpis – nie zna treści sekretu na poziomie logiki
+    - Timestamp chroni przed replay attacks
     """
     if body.card_type not in ("VIRTUAL", "PHYSICAL", "PREPAID"):
         raise HTTPException(status_code=400, detail="card_type must be VIRTUAL, PHYSICAL or PREPAID")
@@ -237,13 +270,16 @@ async def issue_card(
     if not hmac_secret:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    body_dict = {
-        "user_id": body.user_id,
-        "account_id": body.account_id,
-        "card_type": body.card_type,
-        "initial_balance": body.initial_balance,
-    }
-    signature, timestamp = generate_hmac_signature(body_dict, hmac_secret)
+    raw_body = await request.body()
+    try:
+        raw_dict = json.loads(raw_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    valid, reason = verify_bank_signature(raw_dict, x_signature, x_timestamp, hmac_secret)
+    if not valid:
+        raise HTTPException(status_code=401, detail=f"Signature verification failed: {reason}")
+
 
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
@@ -254,8 +290,8 @@ async def issue_card(
                 card_type=body.card_type,
                 initial_balance=body.initial_balance,
                 api_key=x_api_key,
-                signature=signature,
-                timestamp=timestamp,
+                signature=x_signature,
+                timestamp=x_timestamp,
             ))
             return {
                 "card_token": response.card_token,
@@ -269,6 +305,8 @@ async def issue_card(
                 "bank_id": response.bank_id,
                 "message": "IMPORTANT: Save full_pan and cvv - they will never be shown again."
             }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -298,14 +336,16 @@ async def update_card_status(
     card_token: str,
     body: CardStatusRequest,
     x_api_key: str = Header(None, alias="X-API-Key"),
-    x_admin_key: str = Header(None, alias="X-Admin-Key"),):
+    x_admin_key: str = Header(None, alias="X-Admin-Key"),
+):
     """
     Zastrzega lub odblokowuje kartę.
 
     - **BLOCKED** – karta nie może być używana do płatności
     - **ACTIVE** – karta wraca do normalnego działania
-    """
 
+    Wymaga `X-API-Key` (bank) lub `X-Admin-Key` (operator).
+    """
     if not x_api_key and not x_admin_key:
         raise HTTPException(status_code=401, detail="X-API-Key or X-Admin-Key required")
 
@@ -342,14 +382,14 @@ async def update_card_status(
 async def update_lifecycle(
     card_token: str,
     body: UpdateLifecycleRequest,
-    admin_key: str = Depends(verify_admin_key)
+    _: str = Depends(verify_admin_key),
 ):
     """
-    Tylko dla operatora **Card Provider** (nas) – nie dla banków.
+    Tylko dla operatora **Card Provider** – nie dla banków.
 
     Dozwolone przejścia:
-    - **REQUESTED → PRODUCING** – karta trafia do produkcji
-    - **PRODUCING → SHIPPED** – karta wysłana do banku
+    - **REQUESTED → PRODUCING**
+    - **PRODUCING → SHIPPED**
 
     **Wymaga nagłówka X-Admin-Key.**
     """
@@ -381,8 +421,7 @@ async def activate_card(card_token: str, body: ActivateCardBody):
     Symuluje aktywację karty przez klienta w aplikacji mobilnej banku.
 
     - Karta musi być w statusie **SHIPPED**
-    - Po aktywacji karta przechodzi do **ACTIVE** i jest gotowa do płatności
-    - Karty wirtualne aktywują się automatycznie – ten endpoint jest dla fizycznych i prepaid
+    - Karty wirtualne aktywują się automatycznie
     """
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
@@ -432,17 +471,19 @@ async def topup_prepaid(card_token: str, body: TopUpRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- DEV / Admin ---
+
 @app.get("/api/v1/cards/{card_token}/full-pan",
          tags=["DEV / Admin"],
          summary="[ADMIN] Pokaż pełne dane karty – tylko do testów")
 async def get_full_pan(
     card_token: str,
-    admin_key: str = Depends(verify_admin_key),
+    _: str = Depends(verify_admin_key),
 ):
     """
     Zwraca odszyfrowany PAN, CVV i datę ważności.
 
-     **Tylko dla admina i celów testowych.**
+    **Tylko dla admina i celów testowych.**
     Wymaga nagłówka `X-Admin-Key`.
     """
     try:
@@ -461,21 +502,25 @@ async def get_full_pan(
             }
     except Exception as e:
         raise HTTPException(status_code=404, detail="Card not found")
-@app.post(
-    "/api/v1/payments/authorize",
-    tags=["Płatności"],
-    summary="Autoryzacja płatności kartą (POS Terminal)"
-)
 
+
+# --- Płatności ---
+
+@app.post("/api/v1/payments/authorize", tags=["Płatności"],
+          summary="Autoryzacja płatności kartą (POS Terminal)")
 async def authorize_payment(body: AuthorizeRequest):
+    """
+    Symuluje terminal płatniczy POS.
 
+    Flow:
+    1. Walidacja numeru karty algorytmem Luhna
+    2. Wywołanie gRPC AuthorizeTransaction do Card Provider
+    3. Zwrot decyzji APPROVED / DECLINED
+    """
     card_number = body.card_number.replace(" ", "")
 
     if not validate_luhn(card_number):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid card number (Luhn failed)"
-        )
+        raise HTTPException(status_code=400, detail="Invalid card number (Luhn failed)")
 
     try:
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
@@ -534,15 +579,7 @@ async def authorize_payment(body: AuthorizeRequest):
                     else "Declined"
                 )
             }
-
     except grpc.RpcError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"gRPC error: {e.details()}"
-        )
-
+        raise HTTPException(status_code=500, detail=f"gRPC error: {e.details()}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))

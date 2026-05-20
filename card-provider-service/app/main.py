@@ -627,7 +627,29 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
         return card_pb2.IsoResponse(
             payload=bytes(raw_response)
         )
-        
+
+    async def GetFullPan(self, request, context):
+        """Zwraca odszyfrowany PAN – tylko dla admina w celach testowych."""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Card).where(Card.token == request.card_token))
+            card = result.scalar_one_or_none()
+            if not card:
+                await context.abort(grpc.StatusCode.NOT_FOUND, "Card not found")
+                return
+            if not card.pan_encrypted:
+                await context.abort(grpc.StatusCode.NOT_FOUND, "PAN not available")
+                return
+            full_pan = decrypt_pan(card.pan_encrypted)
+            cvv = generate_cvv(full_pan, card.expiry_month, card.expiry_year)
+            return card_pb2.FullPanResponse(
+                card_token=card.token,
+                full_pan=full_pan,
+                masked_pan=card.masked_pan,
+                cvv=cvv,
+                expiry_month=card.expiry_month,
+                expiry_year=card.expiry_year,
+            )
+
 async def serve():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
