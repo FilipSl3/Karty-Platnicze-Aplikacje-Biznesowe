@@ -29,9 +29,16 @@ services:
       VIRTUAL_CARD_ACTIVATION_DELAY: "60"
       PAN_ENCRYPTION_KEY: "karty-platnicze-key-2026"
       CARD_VERIFICATION_KEY: "cvk-secret-key-2026"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minio_admin"
+      MINIO_SECRET_KEY: "minio_admin_2026"
+      MINIO_BUCKET: "settlements"
+      MINIO_RETENTION_DAYS: "1"
     depends_on:
       postgres-db:
         condition: service_healthy
+      minio:
+        condition: service_started
     networks:
       - cards-backend
     # BRAK ports: gRPC (50051) i socket ISO (9000) widoczne TYLKO wewnątrz backendu.
@@ -43,15 +50,15 @@ services:
       dockerfile: Dockerfile
     container_name: cards_gateway_app
     ports:
-      - "8072:8000"            # JEDYNY publiczny punkt wejścia do API
+      - "8072:8000"
     environment:
       GRPC_SERVER_URL: "card-provider:50051"
       ADMIN_API_KEY: "admin-secret-key-2026"
     depends_on:
       - card-provider
     networks:
-      - cards-frontend         # widoczny dla panelu i hosta (8072)
-      - cards-backend          # most: może rozmawiać z providerem i (pośrednio) bazą
+      - cards-frontend
+      - cards-backend
 
   admin-panel:
     build:
@@ -62,7 +69,7 @@ services:
     depends_on:
       - payment-gateway
     networks:
-      - cards-frontend         # tylko frontend - panel NIE ma dostępu do bazy/providera
+      - cards-frontend
 
   minio:
     image: minio/minio:latest
@@ -74,11 +81,7 @@ services:
     volumes:
       - minio_data:/data
     networks:
-      - cards-backend          # archiwum w sieci wewnętrznej (dostęp przez VPN)
-    # Świadomie BRAK ports - to część historii izolacji.
-    # Jeśli w dev koniecznie chcesz konsolę z hosta, tymczasowo dodaj:
-    #   ports:
-    #     - "9011:9001"
+      - cards-backend
 
   wireguard:
     image: linuxserver/wireguard:latest
@@ -110,7 +113,7 @@ networks:
         - subnet: 172.20.0.0/24
   cards-backend:
     driver: bridge
-    internal: true             # brak trasy do internetu = twarda izolacja
+    internal: true
     ipam:
       config:
         - subnet: 172.21.0.0/24

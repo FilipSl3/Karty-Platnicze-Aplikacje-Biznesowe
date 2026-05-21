@@ -21,6 +21,7 @@ from app.database import AsyncSessionLocal, engine, Base, BANK_API_KEYS_SEED
 from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey, Transaction, TransactionStatus
 from iso8583 import encode, decode
 from app.iso_spec import spec
+from app.archive import init_minio_bucket, archive_record
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -292,6 +293,21 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             ))
             await db.commit()
             await db.refresh(card)
+
+            # Archiwizacja zdarzenia wydania karty
+            await asyncio.to_thread(
+                archive_record,
+                {
+                    "event": "CARD_ISSUED",
+                    "card_token": card.token,
+                    "bank_id": bank.bank_id,
+                    "card_type": card.card_type.value,
+                    "masked_pan": card.masked_pan,
+                    "status": card.status.value,
+                    "issued_at": datetime.utcnow().isoformat(),
+                },
+                f"audit/card-issued-{card.token}.json",
+            )
 
             # Karta wirtualna: automatyczna aktywacja
             if request.card_type == "VIRTUAL":
@@ -641,6 +657,7 @@ async def serve():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await seed_bank_api_keys()
+    await asyncio.to_thread(init_minio_bucket)
     server = aio.server()
     card_pb2_grpc.add_CardProviderServicer_to_server(CardProviderServicer(), server)
     server.add_insecure_port('[::]:50051')
