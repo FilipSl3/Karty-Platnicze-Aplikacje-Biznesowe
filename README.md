@@ -9,18 +9,19 @@
 
 1. [Opis modułu](#opis-modułu)
 2. [Architektura systemu](#architektura-systemu)
-3. [Wiedza Domenowa](#wiedza-domenowa)
-4. [Bezpieczeństwo i kryptografia](#bezpieczeństwo-i-kryptografia)
-5. [Cykl życia karty – Maszyna Stanów](#cykl-życia-karty--maszyna-stanów)
-6. [Diagramy](#diagramy)
-7. [Schemat bazy danych](#schemat-bazy-danych)
-8. [Struktura repozytorium](#struktura-repozytorium)
-9. [Technologie](#technologie)
-10. [Uruchomienie projektu](#uruchomienie-projektu)
-11. [Klucze API Banków – BIN Routing](#klucze-api-banków--bin-routing)
-12. [API – Dokumentacja dla innych zespołów](#api--dokumentacja-dla-innych-zespołów)
-13. [Integracja z modułem kart (dla zespołów bankowych)](#integracja-z-modułem-kart-dla-zespołów-bankowych)
-14. [Plan rozwoju](#plan-rozwoju)
+3. [Bezpieczeństwo sieci – izolacja i VPN](#bezpieczeństwo-sieci--izolacja-i-vpn)
+4. [Wiedza Domenowa](#wiedza-domenowa)
+5. [Bezpieczeństwo i kryptografia](#bezpieczeństwo-i-kryptografia)
+6. [Cykl życia karty – Maszyna Stanów](#cykl-życia-karty--maszyna-stanów)
+7. [Diagramy](#diagramy)
+8. [Schemat bazy danych](#schemat-bazy-danych)
+9. [Struktura repozytorium](#struktura-repozytorium)
+10. [Technologie](#technologie)
+11. [Uruchomienie projektu](#uruchomienie-projektu)
+12. [Klucze API Banków – BIN Routing](#klucze-api-banków--bin-routing)
+13. [API – Dokumentacja dla innych zespołów](#api--dokumentacja-dla-innych-zespołów)
+14. [Integracja z modułem kart (dla zespołów bankowych)](#integracja-z-modułem-kart-dla-zespołów-bankowych)
+15. [Plan rozwoju](#plan-rozwoju)
 
 ---
 
@@ -28,22 +29,24 @@
 
 Moduł **Karty Płatnicze** symuluje działanie systemu typu **Visa/Mastercard** – czyli sieci kart płatniczych (Card Network) łączącej banki z terminalami płatniczymi. Składa się z **dwóch osobnych aplikacji**:
 
-- **Card Provider Service** – wydawca kart (Card Network/Issuer Processor), generuje PAN, CVV, zarządza cyklem życia kart, autoryzuje transakcje
+- **Card Provider Service** – wydawca kart (Card Network/Issuer Processor), generuje PAN, CVV, zarządza cyklem życia kart, autoryzuje transakcje przez protokół ISO 8583
 - **Payment Gateway Service** – procesor płatności (Acquirer Processor), obsługuje terminal POS, REST API dla banków i merchantów
 
 ### Główne funkcjonalności
 
 - Generowanie 16-cyfrowego numeru karty (PAN) z algorytmem Luhna i prefiksem BIN
 - Generowanie CVV kryptograficznie (HMAC-SHA256) bez przechowywania w bazie
+- Deterministyczny hash PAN do wykrywania kolizji i wyszukiwania (`pan_hash`)
 - Szyfrowanie PAN w bazie danych (AES-256 przez Fernet)
 - Wydawanie kart wirtualnych, fizycznych i prepaid
 - Maszyna stanów karty: `REQUESTED → PRODUCING → SHIPPED → ACTIVE → BLOCKED`
-- Autoryzacja transakcji w czasie rzeczywistym (gRPC)
+- Autoryzacja transakcji przez protokół ISO 8583 (socket TCP)
 - Clearing i Settlement w cyklu dobowym
 - MSC (Merchant Service Charge) z podziałem prowizji
-- Archiwizacja transakcji w MinIO (WORM)
+- Archiwizacja transakcji w MinIO (WORM / Object Lock)
 - Emulacja terminala płatniczego (POS)
 - Panel administratora (React)
+- Segmentacja sieci Docker z bramą WireGuard VPN
 
 ---
 
@@ -51,44 +54,112 @@ Moduł **Karty Płatnicze** symuluje działanie systemu typu **Visa/Mastercard**
 
 ```mermaid
 graph TD
-    BANK[Bank] -->|REST API\nX-API-Key + HMAC| GW(Payment Gateway\nFastAPI :8072)
+    BANK[Bank] -->|REST API\nX-API-Key + X-Signature + X-Timestamp| GW
     TERMINAL[Terminal POS\nEmulator] -->|REST API| GW
     ADMIN[Admin Panel\n:3072] -->|REST API\nX-Admin-Key| GW
-    GW -->|gRPC :50051| CP[Card Provider\nService]
-    CP -->|SQL| DB[(PostgreSQL\n:5472)]
-    CP -->|Archive after Settlement| MINIO[(MinIO\nWORM :9000)]
 
-    subgraph cards-network
-        GW
-        CP
-        DB
-        MINIO
-        ADMIN
+    subgraph cards-frontend ["cards-frontend (bridge)"]
+        GW(Payment Gateway\nFastAPI :8072)
+        PANEL[Admin Panel\n:3072]
+        VPN[WireGuard VPN\n:51820/udp]
     end
+
+    subgraph cards-backend ["cards-backend (internal – brak dostępu do internetu)"]
+        CP[Card Provider\ngRPC :50051\nISO Socket :9000]
+        DB[(PostgreSQL)]
+        MINIO[(MinIO\nWORM)]
+    end
+
+    GW -->|gRPC :50051| CP
+    GW -->|ISO 8583 socket :9000| CP
+    CP -->|SQL| DB
+    CP -->|Archive| MINIO
+    VPN -->|tunel do backendu| CP
+    VPN -->|tunel do backendu| MINIO
 ```
+
+### Segmentacja sieci
+
+| Sieć | Typ | Zawiera |
+|---|---|---|
+| `cards-frontend` | bridge (publiczna) | gateway, admin-panel, wireguard-vpn |
+| `cards-backend` | bridge (`internal: true`) | card-provider, postgres, minio, wireguard-vpn |
+
+Gateway jest **mostem** między oboma sieciami. Admin-panel jest **tylko** na froncie i nie ma dostępu do bazy ani providera bezpośrednio.
 
 ### Mikroserwisy
 
-#### Card Provider Service (port 50091 zewnętrzny / 50051 wewnętrzny – gRPC)
-- Generowanie i szyfrowanie PAN
-- Generowanie CVV kryptograficznie
-- Autoryzacja transakcji
+#### Card Provider Service (tylko sieć wewnętrzna – brak ekspozycji na host)
+- Generowanie i szyfrowanie PAN (Fernet AES-256)
+- Generowanie CVV kryptograficznie (HMAC-SHA256 + CVK)
+- Autoryzacja transakcji przez ISO 8583 socket (port 9000 wewnętrzny)
 - Maszyna stanów karty
-- Clearing i Settlement
+- Clearing i Settlement + archiwizacja MinIO
 
-#### Payment Gateway Service (port 8072 – REST)
+#### Payment Gateway Service (port 8072 – jedyny publiczny REST)
 - Punkt styku ze światem zewnętrznym
-- Weryfikacja kluczy API banków (X-API-Key)
-- Generowanie i weryfikacja podpisów HMAC-SHA256
-- Routing do Card Provider przez gRPC
-- Obliczanie prowizji MSC
+- Weryfikacja podpisu HMAC-SHA256 od banków (X-Signature + X-Timestamp)
+- Walidacja X-API-Key banku
+- Routing do Card Provider przez gRPC i ISO 8583
 - Swagger UI: `http://localhost:8072/docs`
 
 #### Admin Panel (port 3072 – React)
-- Logowanie administratora
+- Logowanie administratora (admin/admin123)
 - Dashboard ze statystykami kart
 - Zarządzanie cyklem życia kart
 - Podgląd pełnych danych karty (tryb DEV)
+
+#### WireGuard VPN (port 51820/udp)
+- Brama VPN do sieci `cards-backend`
+- Dostęp do MinIO i Card Provider przez tunel
+- Config klienta: `wireguard-config/peer1/peer1.conf`
+
+---
+
+## Bezpieczeństwo sieci – izolacja i VPN
+
+### Zasada zero-trust na poziomie sieci
+
+```
+Internet / Host
+     │
+     ├─── :8072 ──→ [payment-gateway] ──┐
+     │                                  │  cards-backend (internal: true)
+     ├─── :3072 ──→ [admin-panel]       ├─→ [card-provider :50051/:9000]
+     │                                  ├─→ [postgres :5432]
+     └─── :51820/udp → [wireguard-vpn] ─┘  [minio :9000]
+               ↑
+         jedyna droga do
+         sieci wewnętrznej
+         z zewnątrz
+```
+
+### Dowód izolacji
+
+```bash
+# Admin-panel NIE widzi bazy (różne sieci)
+docker exec cards_admin_panel ping -c 2 cards_postgres
+# → ping: bad address 'cards_postgres'
+
+# VPN WIDZI backend (jest w obu sieciach)
+docker exec cards_vpn ping -c 2 cards_minio
+# → 64 bytes from cards_minio ... 0% packet loss
+
+# Tylko gateway i panel mają publiczne porty
+docker ps --format "table {{.Names}}\t{{.Ports}}"
+# cards_admin_panel  0.0.0.0:3072->3000/tcp
+# cards_gateway_app  0.0.0.0:8072->8000/tcp
+# cards_provider_app (brak)
+# cards_postgres     5432/tcp (tylko wewnętrznie)
+# cards_minio        9000/tcp (tylko wewnętrznie)
+# cards_vpn          0.0.0.0:51820->51820/udp
+```
+
+### Połączenie przez VPN
+
+1. Zaimportuj `wireguard-config/peer1/peer1.conf` do klienta WireGuard
+2. Aktywuj tunel
+3. Dostęp do sieci `172.21.0.0/24` (backend) przez tunel
 
 ---
 
@@ -129,20 +200,30 @@ bank-wydawcę                      poprawności
 
 | Etap | Opis | Czas |
 |---|---|---|
-| **Authorization** | Sprawdzenie karty, blokada środków | Real-time (ms) |
+| **Authorization** | Sprawdzenie karty (PAN+CVV+expiry), weryfikacja statusu | Real-time (ms) |
 | **Capture** | Potwierdzenie transakcji przez merchanta | Chwilę po auth |
 | **Clearing** | Wymiana informacji rozliczeniowych | T+0 do T+1 |
-| **Settlement** | Finalny transfer środków między bankami | T+1 |
+| **Settlement** | Finalny transfer środków + archiwizacja MinIO WORM | T+1 |
 
 ### Komunikacja – ISO 8583 i gRPC
 
-Fizyczne terminale POS używają protokołu **ISO 8583** – binarnego protokołu telekomunikacyjnego z 128+ polami danych (Data Elements) i nagłówkiem MTI (Message Type Indicator).
+Fizyczne terminale POS używają protokołu **ISO 8583** – binarnego protokołu telekomunikacyjnego. W projekcie implementujemy uproszczony podzbiór ISO 8583 przez socket TCP (port 9000 wewnętrzny).
 
-W projekcie implementujemy **uproszczony podzbiór ISO 8583** – wiadomości zawierają rzeczywiste pola DE (MTI, DE2, DE3, DE4, DE7, DE11, DE41, DE49) w czytelnym formacie, bez wymagań licencyjnych pełnej implementacji.
+Pola DE używane w projekcie:
 
-Komunikacja wewnętrzna między serwisami pozostaje w **gRPC + Protocol Buffers**. Warstwa wejściowa (terminal → Payment Gateway) przyjmuje strukturę ISO 8583.
+| DE | Nazwa | Opis |
+|---|---|---|
+| DE2 | PAN | Numer karty |
+| DE4 | Amount | Kwota w groszach |
+| DE14 | Expiry Date | MMYY |
+| DE38 | Authorization Code | Kod autoryzacji (odpowiedź) |
+| DE39 | Response Code | 00=OK, 05=Declined, 54=Expired |
+| DE41 | Terminal ID | Identyfikator terminala |
+| DE42 | Merchant ID | Identyfikator merchanta |
+| DE49 | Currency | Kod waluty |
+| DE52 | CVV Data | Kod CVV |
 
-> ⚠️ **Szczegółowy format wiadomości ISO 8583 jest w trakcie ustalania z prowadzącym.**
+Komunikacja wewnętrzna między serwisami (gateway↔provider dla kart) pozostaje w **gRPC + Protocol Buffers**.
 
 ### MSC (Merchant Service Charge)
 
@@ -160,37 +241,31 @@ Prowizja pobierana od każdej transakcji, dzielona na 3 składowe:
 
 ### Generowanie PAN
 
-Pełny 16-cyfrowy PAN generowany jest przez Card Provider (nas) przy każdym zamówieniu karty:
-
 ```
 BIN(6) + środkowe_losowe(9) + cyfra_Luhna(1) = 16 cyfr
 ```
 
-Algorytm Luhna zapewnia poprawność numeru i chroni przed przypadkowymi błędami przy wpisywaniu.
+Algorytm Luhna zapewnia poprawność numeru. Dodatkowo każdy PAN ma deterministyczny hash (`pan_hash = HMAC-SHA256(PAN, CVK)`) przechowywany w bazie jako UNIQUE – umożliwia wyszukiwanie karty przy autoryzacji bez skanowania i deszyfrowania wszystkich rekordów.
 
 ### Generowanie CVV
 
-CVV generowany jest kryptograficznie za pomocą HMAC-SHA256 z tajnym kluczem CVK (Card Verification Key):
-
 ```
-CVV = HMAC-SHA256(PAN + Expiry + ServiceCode, CVK)[:3]
+CVV = HMAC-SHA256(PAN + MMYY + "101", CARD_VERIFICATION_KEY)[:3 cyfry]
 ```
 
-**CVV nie jest przechowywany w bazie** – przy weryfikacji jest obliczany ponownie i porównywany. Nawet jeśli baza danych zostanie skompromitowana, atakujący nie uzyska CVV.
+**CVV nie jest przechowywany w bazie** – obliczany ponownie przy każdej weryfikacji. Nawet wyciek bazy nie ujawnia CVV.
 
 ### Szyfrowanie PAN (AES-256)
 
-Pełny PAN przechowywany jest w bazie w formie zaszyfrowanej (Fernet AES-256):
-
 ```
-W bazie:      pan_encrypted = Fernet.encrypt(full_pan, PAN_ENCRYPTION_KEY)
-Przy autoryzacji: full_pan = Fernet.decrypt(pan_encrypted, PAN_ENCRYPTION_KEY)
-Widoczne:     masked_pan = "4100 01** **** 1234"
+W bazie:          pan_encrypted = Fernet.encrypt(full_pan, PAN_ENCRYPTION_KEY)
+Przy autoryzacji: full_pan      = Fernet.decrypt(pan_encrypted, PAN_ENCRYPTION_KEY)
+Widoczne:         masked_pan    = "4100 01** **** 1234"
 ```
 
 ### Jednorazowe przekazanie danych do banku
 
-Przy wydaniu karty, pełny PAN i CVV są zwracane bankowi **jednorazowo** w odpowiedzi API:
+Przy wydaniu karty, pełny PAN i CVV są zwracane **jednorazowo**:
 
 ```json
 {
@@ -202,28 +277,30 @@ Przy wydaniu karty, pełny PAN i CVV są zwracane bankowi **jednorazowo** w odpo
 }
 ```
 
-Bank zapisuje te dane u siebie i pokazuje klientowi. My po tym nigdy już nie zwrócimy pełnego PAN (poza trybem DEV dla administratora).
-
 ### Uwierzytelnianie banków – HMAC + API Key
 
-Każde żądanie od banku musi zawierać:
+Każde żądanie od banku **musi** zawierać trzy nagłówki HTTP:
 
 ```
-Nagłówek:  X-API-Key: bank-key-pl-a
-Podpis:    HMAC-SHA256(timestamp + body, hmac_secret)
-Timestamp: Unix timestamp (żądanie ważne max 30 sekund)
+X-API-Key:   bank-key-pl-a
+X-Signature: HMAC-SHA256(timestamp + body_json, hmac_secret)
+X-Timestamp: 1715123456
 ```
+
+Payment Gateway weryfikuje podpis nad **surowym body** requestu. Timestamp jest ważny maksymalnie **30 sekund** (ochrona przed replay attack).
 
 Chroni to przed:
 - Nieautoryzowanym dostępem (X-API-Key)
-- Fałszowaniem requestów (HMAC podpis)
-- Atakami replay (timestamp + 30s okno)
+- Fałszowaniem treści requestu (HMAC podpis)
+- Atakami replay (timestamp + okno 30s)
+
+Bez znajomości sekretu HMAC bank **nie może** wydać ani zablokować karty – nawet znając klucz API.
 
 ### Dwa poziomy dostępu
 
 | Klucz | Kto | Do czego |
 |---|---|---|
-| `X-API-Key` | Banki | Wydawanie kart, blokowanie, aktywacja |
+| `X-API-Key` + `X-Signature` + `X-Timestamp` | Banki | Wydawanie kart, blokowanie, aktywacja |
 | `X-Admin-Key` | Operator Card Provider (my) | Lista kart, cykl produkcji, podgląd PAN (DEV) |
 
 ---
@@ -234,7 +311,7 @@ Chroni to przed:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> REQUESTED : Bank zamawia kartę\nPOST /api/v1/cards/issue\n(X-API-Key + HMAC)
+    [*] --> REQUESTED : Bank zamawia kartę\nPOST /api/v1/cards/issue\n(X-API-Key + X-Signature + X-Timestamp)
 
     REQUESTED --> PRODUCING : Operator Card Provider\nrozpoczyna produkcję\nPATCH /lifecycle {PRODUCING}\n(X-Admin-Key)
 
@@ -285,11 +362,12 @@ sequenceDiagram
     participant CP as Card Provider
     participant K as Klient
 
-    B->>GW: POST /api/v1/cards/issue\nX-API-Key + HMAC-SHA256
-    GW->>GW: Weryfikacja X-API-Key\nGenerowanie podpisu HMAC
-    GW->>CP: gRPC CreateCard()\n{api_key, signature, timestamp}
-    CP->>CP: Weryfikacja HMAC\nGenerowanie PAN (Luhn)\nGenerowanie CVV (HMAC)\nSzyfrowanie PAN (AES-256)
-    CP->>CP: Zapis do DB\n{pan_encrypted, masked_pan, expiry}
+    B->>B: Generuje podpis\nHMAC-SHA256(timestamp+body, secret)
+    B->>GW: POST /api/v1/cards/issue\nX-API-Key + X-Signature + X-Timestamp
+    GW->>GW: Weryfikacja X-API-Key\nWeryfikacja X-Signature (HMAC)\nSprawdzenie X-Timestamp (max 30s)
+    GW->>CP: gRPC CreateCard()\n{api_key, user_id, card_type, ...}
+    CP->>CP: Generowanie PAN (Luhn)\nGenerowanie CVV (HMAC)\nSzyfrowanie PAN (AES-256)\nGenerowanie pan_hash (HMAC)
+    CP->>CP: Zapis do DB\n{pan_encrypted, pan_hash, masked_pan, expiry}
     CP-->>GW: {full_pan, cvv, expiry, token, status: REQUESTED}
     GW-->>B: {full_pan, cvv, expiry, token}\n⚠️ PAN i CVV tylko raz!
 
@@ -306,7 +384,7 @@ sequenceDiagram
     GW-->>B: Karta gotowa do płatności ✅
 ```
 
-### BPMN: Autoryzacja płatności kartą
+### BPMN: Autoryzacja płatności kartą (ISO 8583)
 
 ```mermaid
 sequenceDiagram
@@ -314,24 +392,19 @@ sequenceDiagram
     participant T as Terminal POS
     participant GW as Payment Gateway
     participant CP as Card Provider
-    participant BANK as Bank-Wydawca
 
     K->>T: Wpisuje/przykłada kartę\n{PAN, CVV, expiry}
     T->>GW: POST /api/v1/payments/authorize\n{card_number, cvv, expiry, amount}
-    GW->>GW: Walidacja Luhna\nIdentyfikacja banku po BIN
-    GW->>CP: gRPC AuthorizeTransaction()\n{card_number, cvv, expiry, amount}
-    CP->>CP: Odszyfrowanie pan_encrypted\nPorównanie PAN\nWeryfikacja CVV (HMAC)\nSprawdzenie expiry
-    CP->>CP: Sprawdzenie statusu\n(musi być ACTIVE)
-    CP->>CP: Sprawdzenie limitu dziennego
-    CP->>BANK: POST /authorize\n{account_id, amount}
-    alt Karta ACTIVE + środki + limit OK
-        BANK-->>CP: {status: APPROVED, auth_code}
-        CP->>CP: Blokada środków\nZapis transakcji AUTHORIZED
-        CP-->>GW: {APPROVED, auth_code, transaction_id}
+    GW->>GW: Walidacja Luhna
+    GW->>GW: Koduje ISO 8583\n{MTI:0100, DE2:PAN, DE4:amount, DE52:CVV}
+    GW->>CP: TCP Socket :9000\nISO 8583 message
+    CP->>CP: Dekoduje ISO 8583\nSzuka karty po pan_hash\nWeryfikacja CVV (HMAC)\nSprawdzenie expiry (DE54)\nSprawdzenie statusu ACTIVE
+    alt Karta ACTIVE + CVV OK + expiry OK
+        CP-->>GW: ISO 8583 {MTI:0110, DE39:00, DE38:auth_code}
         GW-->>T: 200 APPROVED ✅
         T-->>K: Płatność zatwierdzona
     else Odmowa
-        CP-->>GW: {DECLINED, reason}
+        CP-->>GW: ISO 8583 {MTI:0110, DE39:05}
         GW-->>T: 200 DECLINED ❌
         T-->>K: Płatność odrzucona
     end
@@ -345,7 +418,7 @@ sequenceDiagram
     participant CP as Card Provider
     participant DB as PostgreSQL
     participant BANK as Bank-Wydawca
-    participant MINIO as MinIO
+    participant MINIO as MinIO WORM
 
     Note over S: Uruchomienie nocne (2:00)
     S->>CP: Trigger settlement job
@@ -356,7 +429,7 @@ sequenceDiagram
         CP->>DB: Status → SETTLED\nSettled_at = now()
     end
     CP->>DB: Oblicz MSC per transakcja\n(interchange + scheme + acquirer)
-    CP->>MINIO: Eksport JSON do bucketu\n(Object Lock WORM)
+    CP->>MINIO: PUT object\n{transaction_id}.json\n(Object Lock WORM – niemodyfikowalny)
     CP-->>S: Settlement zakończony\n{count, total_amount, total_fees}
 ```
 
@@ -374,12 +447,14 @@ erDiagram
         string token UK
         string masked_pan
         string pan_encrypted
+        string pan_hash UK
         int expiry_month
         int expiry_year
         string card_type
         string status
         decimal balance
         decimal daily_limit
+        decimal held_balance
         timestamp created_at
         timestamp activated_at
     }
@@ -450,22 +525,30 @@ erDiagram
 .
 ├── docker-compose.yaml
 ├── proto/
-│   └── card.proto                    # Kontrakt gRPC
+│   └── card.proto                        # Kontrakt gRPC
+├── wireguard-config/                     # Konfiguracja WireGuard VPN (w .gitignore)
+│   ├── wg_confs/wg0.conf                 # Config serwera VPN
+│   └── peer1/peer1.conf                  # Config klienta (do importu w WireGuard)
 ├── card-provider-service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── alembic/                      # Migracje bazy danych
+│   ├── alembic/                          # Migracje bazy danych
 │   └── app/
-│       ├── main.py                   # Serwer gRPC + logika biznesowa
-│       ├── models.py                 # SQLAlchemy modele
-│       ├── database.py               # Połączenie DB + seed kluczy API
-│       ├── card_pb2.py               # Wygenerowane z proto
+│       ├── main.py                       # Serwer gRPC + logika biznesowa
+│       ├── models.py                     # SQLAlchemy modele
+│       ├── database.py                   # Połączenie DB + seed kluczy API
+│       ├── iso_socket_server.py          # Serwer ISO 8583 (TCP :9000)
+│       ├── iso_spec.py                   # Definicja pól ISO 8583
+│       ├── card_pb2.py                   # Wygenerowane z proto
 │       └── card_pb2_grpc.py
 ├── payment-gateway-service/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── app/
-│       ├── main.py                   # FastAPI REST API
+│       ├── main.py                       # FastAPI REST API
+│       ├── iso_socket_client.py          # Klient ISO 8583 (TCP)
+│       ├── iso_spec.py                   # Definicja pól ISO 8583
+│       ├── grpc_client.py                # Klient gRPC
 │       ├── card_pb2.py
 │       └── card_pb2_grpc.py
 ├── admin-panel/
@@ -480,7 +563,7 @@ erDiagram
 │           ├── Dashboard.jsx
 │           ├── CardList.jsx
 │           └── CardDetail.jsx
-├── test_hmac.py                      # Testy bezpieczeństwa HMAC
+├── test_hmac.py                          # Testy bezpieczeństwa HMAC
 └── README.md
 ```
 
@@ -491,15 +574,17 @@ erDiagram
 | Warstwa | Technologia | Uzasadnienie |
 |---|---|---|
 | Backend | Python 3.11 | Szybki development, bogate biblioteki |
-| Komunikacja wewnętrzna | gRPC + Protocol Buffers | Binarny, typowany kontrakt – analogia do ISO 8583 |
+| Komunikacja kart | gRPC + Protocol Buffers | Typowany kontrakt wewnętrzny |
+| Komunikacja terminali | ISO 8583 (TCP socket) | Standard branżowy dla terminali POS |
 | REST API | FastAPI | Automatyczny Swagger, async, Pydantic |
 | Baza danych | PostgreSQL 16 | ACID – krytyczne przy transakcjach finansowych |
 | Szyfrowanie PAN | Fernet (AES-256) | Standard szyfrowania symetrycznego |
 | Podpis requestów | HMAC-SHA256 | Weryfikacja autentyczności żądań banków |
 | CVV | HMAC-SHA256 + CVK | Kryptograficzne generowanie bez przechowywania |
 | Frontend | React + Vite + Nginx | Panel admina |
-| Archiwizacja | MinIO | S3-compatible, Object Lock (WORM) |
+| Archiwizacja | MinIO (Object Lock WORM) | S3-compatible, niemodyfikowalne archiwa |
 | Konteneryzacja | Docker Compose | Izolacja, łatwe uruchomienie |
+| Sieć VPN | WireGuard | Szyfrowany tunel do sieci wewnętrznej |
 
 ---
 
@@ -507,12 +592,12 @@ erDiagram
 
 ### Wymagania
 
-- Docker Desktop lub Podman
+- Docker Desktop (Linux, Windows z WSL2, macOS)
 
 ### Start
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 ### Serwisy po uruchomieniu
@@ -521,10 +606,13 @@ docker-compose up --build
 |---|---|---|
 | REST API + Swagger | http://localhost:8072/docs | Główny interfejs |
 | Payment Gateway | http://localhost:8072 | REST API |
-| Card Provider | localhost:50091 | gRPC (wewnętrzny) |
-| PostgreSQL | localhost:5472 | Baza danych |
 | Admin Panel | http://localhost:3072 | Panel admina (admin/admin123) |
-| MinIO Console | http://localhost:9001 | Archiwum (planowane) |
+| WireGuard VPN | localhost:51820/udp | Brama VPN do sieci wewnętrznej |
+| Card Provider | tylko sieć wewnętrzna | gRPC :50051, ISO socket :9000 |
+| PostgreSQL | tylko sieć wewnętrzna | :5432 |
+| MinIO | tylko sieć wewnętrzna | :9000 (dostęp przez VPN) |
+
+> ⚠️ Card Provider, PostgreSQL i MinIO **nie mają** wystawionych portów na host. Dostęp z zewnątrz tylko przez bramę WireGuard VPN.
 
 ### Zmienne środowiskowe
 
@@ -534,8 +622,10 @@ docker-compose up --build
 | `GRPC_SERVER_URL` | `card-provider:50051` | Adres Card Provider |
 | `VIRTUAL_CARD_ACTIVATION_DELAY` | `3600` | Auto-aktywacja Virtual w sekundach |
 | `PAN_ENCRYPTION_KEY` | `karty-platnicze-key-2026` | Klucz szyfrowania AES-256 |
-| `CARD_VERIFICATION_KEY` | `cvk-secret-key-2026` | Klucz generowania CVV |
+| `CARD_VERIFICATION_KEY` | `cvk-secret-key-2026` | Klucz generowania CVV i pan_hash |
 | `ADMIN_API_KEY` | `admin-secret-key-2026` | Klucz X-Admin-Key |
+| `MINIO_ROOT_USER` | `minio_admin` | Login MinIO |
+| `MINIO_ROOT_PASSWORD` | `minio_admin_2026` | Hasło MinIO |
 
 > **DEV TIP:** `VIRTUAL_CARD_ACTIVATION_DELAY=60` w docker-compose.yaml – karta wirtualna aktywuje się po 60 sekundach zamiast 1 godziny.
 
@@ -543,7 +633,7 @@ docker-compose up --build
 
 ## Klucze API Banków – BIN Routing
 
-Każdy bank otrzymuje unikalny klucz API i sekret HMAC przy podpisaniu umowy z procesorem kart. Na podstawie klucza przypisywany jest **6-cyfrowy prefiks BIN**, który identyfikuje bank-wydawcę podczas autoryzacji.
+Każdy bank otrzymuje unikalny klucz API i sekret HMAC przy podpisaniu umowy z procesorem kart. Na podstawie klucza przypisywany jest **6-cyfrowy prefiks BIN**, który identyfikuje bank-wydawcę.
 
 | bank_id | Klucz API | Sekret HMAC | Prefiks BIN | Waluta |
 |---|---|---|---|---|
@@ -568,7 +658,7 @@ Każdy bank otrzymuje unikalny klucz API i sekret HMAC przy podpisaniu umowy z p
 
 | Metoda | Endpoint | Auth | Opis |
 |---|---|---|---|
-| `POST` | `/api/v1/cards/issue` | X-API-Key | Wydaj nową kartę |
+| `POST` | `/api/v1/cards/issue` | X-API-Key + X-Signature + X-Timestamp | Wydaj nową kartę |
 | `GET` | `/api/v1/cards` | X-Admin-Key | Lista wszystkich kart |
 | `GET` | `/api/v1/cards/{token}` | — | Szczegóły karty |
 | `GET` | `/api/v1/cards/{token}/full-pan` | X-Admin-Key | Pełny PAN (tylko DEV) |
@@ -581,11 +671,9 @@ Każdy bank otrzymuje unikalny klucz API i sekret HMAC przy podpisaniu umowy z p
 
 | Metoda | Endpoint | Auth | Opis |
 |---|---|---|---|
-| `POST` | `/api/v1/payments/authorize` | — | Autoryzuj płatność |
-| `POST` | `/api/v1/payments/{id}/capture` | — | Potwierdź transakcję |
-| `POST` | `/api/v1/payments/{id}/refund` | — | Zwrot środków |
+| `POST` | `/api/v1/payments/authorize` | — | Autoryzuj płatność (ISO 8583 przez gateway) |
 
-### gRPC (Card Provider – port 50091)
+### gRPC (Card Provider – sieć wewnętrzna)
 
 Plik kontraktu: `proto/card.proto`
 
@@ -603,6 +691,7 @@ service CardProvider {
     rpc AuthorizeTransaction (AuthorizationRequest) returns (AuthorizationResponse);
     rpc SettleTransaction (SettlementRequest) returns (SettlementResponse);
     rpc InitiateChargeback (ChargebackRequest) returns (ChargebackResponse);
+    rpc ProcessIsoMessage (IsoRequest) returns (IsoResponse);
 }
 ```
 
@@ -615,7 +704,7 @@ service CardProvider {
 
 ### 1. Jak podpisać żądanie (HMAC)
 
-Każde żądanie wydania karty musi być podpisane. Przykład w Pythonie:
+Każde żądanie **musi** być podpisane. Bank sam generuje podpis ze swojego sekretu HMAC:
 
 ```python
 import hmac, hashlib, time, json
@@ -636,9 +725,12 @@ def sign_request(body: dict) -> tuple[str, str]:
 ### 2. Jak zamówić kartę
 
 ```bash
+# Najpierw wygeneruj podpis (patrz wyżej), następnie:
 curl -X POST http://localhost:8072/api/v1/cards/issue \
   -H "Content-Type: application/json" \
   -H "X-API-Key: bank-key-pl-a" \
+  -H "X-Signature: <wygenerowany_podpis>" \
+  -H "X-Timestamp: <unix_timestamp>" \
   -d '{
     "user_id": "twoj_user_id",
     "account_id": "twoje_account_id",
@@ -761,6 +853,7 @@ Możliwe `decline_reason`: `INSUFFICIENT_FUNDS`, `ACCOUNT_BLOCKED`, `LIMIT_EXCEE
 | Generowanie PAN (Luhn, BIN 6 cyfr) | Filip | ✅ Zrobione |
 | Generowanie CVV (HMAC-SHA256) | Filip | ✅ Zrobione |
 | Szyfrowanie PAN (AES-256 Fernet) | Filip | ✅ Zrobione |
+| Pan hash (HMAC deterministyczny, UNIQUE) | Filip | ✅ Zrobione |
 | gRPC CreateCard + typy kart | Filip | ✅ Zrobione |
 | Maszyna stanów karty | Filip | ✅ Zrobione |
 | Auto-aktywacja karty wirtualnej | Filip | ✅ Zrobione |
@@ -769,7 +862,7 @@ Możliwe `decline_reason`: `INSUFFICIENT_FUNDS`, `ACCOUNT_BLOCKED`, `LIMIT_EXCEE
 | HMAC-SHA256 auth + replay protection | Filip | ✅ Zrobione |
 | Doładowanie karty prepaid | Filip | ✅ Zrobione |
 | Panel admina (React) | Filip | ✅ Zrobione |
-| AuthorizeTransaction (gRPC) | Kolega | 🔄 W trakcie |
+| AuthorizeTransaction / ISO 8583 socket | Kolega | 🔄 W trakcie |
 | REST API Terminal POS | Kolega | 🔄 W trakcie |
 | MSC – Merchant Service Charge | Kolega | 🔄 W trakcie |
 | Clearing & Settlement (nocny job) | Kolega | 🔄 W trakcie |
@@ -779,7 +872,7 @@ Możliwe `decline_reason`: `INSUFFICIENT_FUNDS`, `ACCOUNT_BLOCKED`, `LIMIT_EXCEE
 
 | Zadanie | Kto | Status |
 |---|---|---|
-| Archiwizacja MinIO (WORM) | Filip | ⏳ Planowane |
+| Archiwizacja MinIO (WORM / Object Lock) | Filip | ⏳ W toku |
 | Płatności offline (floor limit) | Kolega | ⏳ Planowane |
 
 ### Etap 3 – Ocena 5.0
@@ -787,4 +880,5 @@ Możliwe `decline_reason`: `INSUFFICIENT_FUNDS`, `ACCOUNT_BLOCKED`, `LIMIT_EXCEE
 | Zadanie | Kto | Status |
 |---|---|---|
 | Mechanizm Chargeback | Kolega | ⏳ Planowane |
-| Symulacja sieci VPN / izolacja Docker | Filip | ⏳ Planowane |
+| Segmentacja sieci Docker (frontend/backend) | Filip | ✅ Zrobione |
+| Brama WireGuard VPN do sieci wewnętrznej | Filip | ✅ Zrobione |

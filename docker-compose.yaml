@@ -6,9 +6,6 @@ services:
       POSTGRES_USER: bank_user
       POSTGRES_PASSWORD: bank_pass
       POSTGRES_DB: cards_db
-    ports:
-      - "5472:5432"
-      - "9000:9000"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -17,15 +14,15 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - cards-network
+      - cards-backend
+    # BRAK ports: baza wyłącznie w sieci wewnętrznej (izolacja).
+    # Dostęp w dev przez: docker exec -it cards_postgres psql -U bank_user -d cards_db
 
   card-provider:
     build:
       context: ./card-provider-service
       dockerfile: Dockerfile
     container_name: cards_provider_app
-    ports:
-      - "50091:50051"
     environment:
       DATABASE_URL: "postgresql+asyncpg://bank_user:bank_pass@postgres-db/cards_db"
       GRPC_PORT: 50051
@@ -36,7 +33,9 @@ services:
       postgres-db:
         condition: service_healthy
     networks:
-      - cards-network
+      - cards-backend
+    # BRAK ports: gRPC (50051) i socket ISO (9000) widoczne TYLKO wewnątrz backendu.
+    # Gateway łączy się przez nazwę 'card-provider' w tej samej sieci - działa bez zmian.
 
   payment-gateway:
     build:
@@ -44,14 +43,15 @@ services:
       dockerfile: Dockerfile
     container_name: cards_gateway_app
     ports:
-      - "8072:8000"
+      - "8072:8000"            # JEDYNY publiczny punkt wejścia do API
     environment:
       GRPC_SERVER_URL: "card-provider:50051"
       ADMIN_API_KEY: "admin-secret-key-2026"
     depends_on:
       - card-provider
     networks:
-      - cards-network
+      - cards-frontend         # widoczny dla panelu i hosta (8072)
+      - cards-backend          # most: może rozmawiać z providerem i (pośrednio) bazą
 
   admin-panel:
     build:
@@ -62,11 +62,59 @@ services:
     depends_on:
       - payment-gateway
     networks:
-      - cards-network
+      - cards-frontend         # tylko frontend - panel NIE ma dostępu do bazy/providera
+
+  minio:
+    image: minio/minio:latest
+    container_name: cards_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio_admin
+      MINIO_ROOT_PASSWORD: minio_admin_2026
+    volumes:
+      - minio_data:/data
+    networks:
+      - cards-backend          # archiwum w sieci wewnętrznej (dostęp przez VPN)
+    # Świadomie BRAK ports - to część historii izolacji.
+    # Jeśli w dev koniecznie chcesz konsolę z hosta, tymczasowo dodaj:
+    #   ports:
+    #     - "9011:9001"
+
+  wireguard:
+    image: linuxserver/wireguard:latest
+    container_name: cards_vpn
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Warsaw
+    volumes:
+      - ./wireguard-config:/config
+    ports:
+      - "51820:51820/udp"
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    privileged: true
+    networks:
+      - cards-frontend
+      - cards-backend
+    restart: unless-stopped
 
 networks:
-  cards-network:
+  cards-frontend:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+  cards-backend:
+    driver: bridge
+    internal: true             # brak trasy do internetu = twarda izolacja
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
 
 volumes:
   postgres_data:
+  minio_data:
