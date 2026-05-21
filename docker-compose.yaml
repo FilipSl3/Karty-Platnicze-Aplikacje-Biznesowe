@@ -6,9 +6,6 @@ services:
       POSTGRES_USER: bank_user
       POSTGRES_PASSWORD: bank_pass
       POSTGRES_DB: cards_db
-    ports:
-      - "5472:5432"
-      - "9000:9000"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -17,26 +14,35 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - cards-network
+      - cards-backend
+    # BRAK ports: baza wyłącznie w sieci wewnętrznej (izolacja).
+    # Dostęp w dev przez: docker exec -it cards_postgres psql -U bank_user -d cards_db
 
   card-provider:
     build:
       context: ./card-provider-service
       dockerfile: Dockerfile
     container_name: cards_provider_app
-    ports:
-      - "50091:50051"
     environment:
       DATABASE_URL: "postgresql+asyncpg://bank_user:bank_pass@postgres-db/cards_db"
       GRPC_PORT: 50051
       VIRTUAL_CARD_ACTIVATION_DELAY: "60"
       PAN_ENCRYPTION_KEY: "karty-platnicze-key-2026"
       CARD_VERIFICATION_KEY: "cvk-secret-key-2026"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minio_admin"
+      MINIO_SECRET_KEY: "minio_admin_2026"
+      MINIO_BUCKET: "settlements"
+      MINIO_RETENTION_DAYS: "1"
     depends_on:
       postgres-db:
         condition: service_healthy
+      minio:
+        condition: service_started
     networks:
-      - cards-network
+      - cards-backend
+    # BRAK ports: gRPC (50051) i socket ISO (9000) widoczne TYLKO wewnątrz backendu.
+    # Gateway łączy się przez nazwę 'card-provider' w tej samej sieci - działa bez zmian.
 
   payment-gateway:
     build:
@@ -51,7 +57,8 @@ services:
     depends_on:
       - card-provider
     networks:
-      - cards-network
+      - cards-frontend
+      - cards-backend
 
   admin-panel:
     build:
@@ -62,11 +69,55 @@ services:
     depends_on:
       - payment-gateway
     networks:
-      - cards-network
+      - cards-frontend
+
+  minio:
+    image: minio/minio:latest
+    container_name: cards_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio_admin
+      MINIO_ROOT_PASSWORD: minio_admin_2026
+    volumes:
+      - minio_data:/data
+    networks:
+      - cards-backend
+
+  wireguard:
+    image: linuxserver/wireguard:latest
+    container_name: cards_vpn
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Warsaw
+    volumes:
+      - ./wireguard-config:/config
+    ports:
+      - "51820:51820/udp"
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    privileged: true
+    networks:
+      - cards-frontend
+      - cards-backend
+    restart: unless-stopped
 
 networks:
-  cards-network:
+  cards-frontend:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+  cards-backend:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
 
 volumes:
   postgres_data:
+  minio_data:
