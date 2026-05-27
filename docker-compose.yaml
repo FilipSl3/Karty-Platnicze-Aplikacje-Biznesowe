@@ -132,7 +132,7 @@ networks:
   cards-backend:
     name: cards-backend
     driver: bridge
-    internal: true
+    #internal: true
     ipam:
       config:
         - subnet: 172.21.0.0/24
