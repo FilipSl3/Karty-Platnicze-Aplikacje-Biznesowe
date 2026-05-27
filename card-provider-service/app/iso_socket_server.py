@@ -14,6 +14,14 @@ import os
 
 from cryptography.fernet import Fernet
 
+from decimal import Decimal
+
+from app.models import (
+    Card,
+    CardStatus,
+    Transaction,
+    TransactionStatus
+)
 
 HOST = "0.0.0.0"
 PORT = 9000
@@ -82,7 +90,6 @@ def verify_cvv(
 async def handle_client(reader, writer):
 
     try:
-        # najpierw długość wiadomości
         length_bytes = await reader.readexactly(4)
 
         message_length = int.from_bytes(
@@ -90,18 +97,27 @@ async def handle_client(reader, writer):
             "big"
         )
 
-        
         data = await reader.readexactly(
             message_length
         )
 
         print("RAW SOCKET DATA:", data)
 
-        decoded, _ = decode(bytes(data), spec)
+        decoded, _ = decode(
+            bytes(data),
+            spec
+        )
 
         print("DECODED ISO:", decoded)
 
+        authorization_code = ""
+
         card_number = decoded["2"]
+
+        amount = (
+            Decimal(decoded["4"])
+            / Decimal("100")
+        )
 
         expiry = decoded["14"]
         expiry_month = int(expiry[:2])
@@ -116,18 +132,68 @@ async def handle_client(reader, writer):
 
             card = None
 
-            for c in cards:
-                full_pan = decrypt_pan(c.pan_encrypted)
+            try:
+                for c in cards:
 
-                if full_pan == card_number:
-                    card = c
-                    break
+                    print("CHECK CARD:", c.id)
+
+                    if not c.pan_encrypted:
+                        print(
+                            "CARD WITHOUT PAN:",
+                            c.id
+                        )
+                        continue
+
+                    print(
+                        "PAN ENCRYPTED:",
+                        c.pan_encrypted
+                    )
+
+                    full_pan = decrypt_pan(
+                        c.pan_encrypted
+                    )
+
+                    print(
+                        "FULL PAN:",
+                        full_pan
+                    )
+
+                    if full_pan == card_number:
+                        card = c
+                        print("CARD MATCH")
+                        break
+
+            except Exception:
+                import traceback
+
+                print("CARD LOOP ERROR")
+                traceback.print_exc()
 
             if not card:
                 response_code = "05"
 
             else:
-                full_pan = decrypt_pan(card.pan_encrypted)
+
+                full_pan = decrypt_pan(
+                    card.pan_encrypted
+                )
+
+                available_balance = (
+                    Decimal(str(card.balance))
+                    - Decimal(
+                        str(card.held_balance)
+                    )
+                )
+
+                print(
+                    "AVAILABLE:",
+                    available_balance
+                )
+
+                print(
+                    "AMOUNT:",
+                    amount
+                )
 
                 if not verify_cvv(
                     full_pan,
@@ -137,35 +203,118 @@ async def handle_client(reader, writer):
                 ):
                     response_code = "05"
 
-                elif card.status != CardStatus.ACTIVE:
+                elif (
+                    card.expiry_month
+                    != expiry_month
+                    or
+                    card.expiry_year
+                    != expiry_year
+                ):
+                    response_code = "54"
+
+                elif (
+                    card.status
+                    != CardStatus.ACTIVE
+                ):
                     response_code = "05"
+
+                elif (
+                    available_balance
+                    < amount
+                ):
+                    response_code = "51"
 
                 else:
                     response_code = "00"
 
+                    authorization_code = (
+                        secrets
+                        .token_hex(3)
+                        .upper()
+                    )
+
+                    card.held_balance = (
+                        Decimal(
+                            str(
+                                card.held_balance
+                            )
+                        )
+                        + amount
+                    )
+
+                    transaction = Transaction(
+                        card_id=card.id,
+                        merchant_id=
+                            decoded["42"]
+                            .strip(),
+
+                        merchant_name=
+                            decoded["42"]
+                            .strip(),
+
+                        amount=amount,
+
+                        currency=
+                            decoded.get(
+                                "49",
+                                "PLN"
+                            ),
+
+                        status=
+                            TransactionStatus
+                            .AUTHORIZED,
+
+                        authorization_code=
+                            authorization_code
+                    )
+
+                    db.add(transaction)
+
+                    await db.commit()
+
+                    print(
+                        "AUTHORIZED"
+                    )
+
+                    print(
+                        "HELD:",
+                        card.held_balance
+                    )
+
         response_iso = {
             "t": "0110",
             "39": response_code,
-            "38": secrets.token_hex(3).upper()
+            "38":
+                authorization_code
+                if response_code == "00"
+                else "000000"
         }
 
-        raw_response, _ = encode(response_iso, spec)
+        raw_response, _ = encode(
+            response_iso,
+            spec
+        )
 
-        response_payload = bytes(raw_response)
+        response_payload = bytes(
+            raw_response
+        )
 
         response_length = len(
             response_payload
         ).to_bytes(4, "big")
 
         writer.write(
-            response_length +
-            response_payload
+            response_length
+            + response_payload
         )
 
         await writer.drain()
 
     except Exception as e:
-        print("SOCKET ERROR:", str(e))
+        import traceback
+
+        print("SOCKET ERROR")
+        traceback.print_exc()
 
     finally:
         writer.close()

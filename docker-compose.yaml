@@ -34,6 +34,13 @@ services:
       MINIO_SECRET_KEY: "minio_admin_2026"
       MINIO_BUCKET: "settlements"
       MINIO_RETENTION_DAYS: "1"
+      
+      INTERCHANGE_FEE_PERCENT: 1.5
+      SCHEME_FEE_PERCENT: 0.3
+      ACQUIRER_FEE_PERCENT: 0.2
+
+      SETTLEMENT_INTERVAL_SECONDS: "30" #"86400" jakb bysmy chcieli po dniu a nie po 30 sekundach
+
     depends_on:
       postgres-db:
         condition: service_healthy

@@ -22,6 +22,10 @@ from app.models import Card, CardType, CardStatus, CardStatusHistory, BankApiKey
 from iso8583 import encode, decode
 from app.iso_spec import spec
 from app.archive import init_minio_bucket, archive_record
+from decimal import Decimal
+
+from app.models import TransactionFee
+from app.msc import calculate_msc
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,6 +38,7 @@ SIGNATURE_MAX_AGE_SECONDS = 30
 PAN_ENCRYPTION_KEY = os.getenv("PAN_ENCRYPTION_KEY", "karty-platnicze-key-2026")
 CARD_VERIFICATION_KEY = os.getenv("CARD_VERIFICATION_KEY", "cvk-secret-key-2026")
 
+SETTLEMENT_INTERVAL_SECONDS = int(os.getenv("SETTLEMENT_INTERVAL_SECONDS","86400"))
 # Maszyna stanów – dozwolone przejścia
 ALLOWED_TRANSITIONS = {
     CardStatus.REQUESTED: [CardStatus.PRODUCING],
@@ -234,6 +239,87 @@ async def seed_bank_api_keys():
                 logger.info(f"Seeded API key for {seed['bank_id']}")
         await db.commit()
 
+async def seed_test_cards():
+    async with AsyncSessionLocal() as db:
+
+        existing = await db.execute(
+            select(Card)
+        )
+
+        if existing.scalars().first():
+            logger.info(
+                "Test cards already exist"
+            )
+            return
+
+        bank = await db.execute(
+            select(BankApiKey).where(
+                BankApiKey.bank_id
+                == "POLISH_BANK_A"
+            )
+        )
+
+        bank = bank.scalar_one()
+
+        full_pan = "4100013395241296"
+
+        expiry_month = 5
+        expiry_year = 29
+
+        card = Card(
+            id=uuid.uuid4(),
+            user_id="test-user",
+            account_id="acc-1",
+            bank_id=bank.bank_id,
+            token=generate_token(),
+            masked_pan=
+                "4100 01** **** 1296",
+
+            pan_encrypted=
+                encrypt_pan(
+                    full_pan
+                ),
+
+            pan_hash=
+                hash_pan(
+                    full_pan
+                ),
+
+            expiry_month=
+                expiry_month,
+
+            expiry_year=
+                expiry_year,
+
+            card_type=
+                CardType.PHYSICAL,
+
+            status=
+                CardStatus.ACTIVE,
+
+            balance=
+                Decimal("1000.00"),
+
+            daily_limit=
+                Decimal("5000.00"),
+
+            held_balance=
+                Decimal("0.00")
+        )
+
+        db.add(card)
+
+        await db.commit()
+
+        logger.info(
+            f"Seeded test card: "
+            f"{full_pan}"
+        )
+
+        logger.info(
+            f"CVV: "
+            f"{generate_cvv(full_pan, 5, 29)}"
+        )
 class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
     
     async def CreateCard(self, request, context):
@@ -506,7 +592,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
         """
         Autoryzacja płatności kartą POS.
         """
-
+        
         try:
             async with AsyncSessionLocal() as db:
 
@@ -558,15 +644,17 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 message=str(e)
             )
     async def ProcessIsoMessage(self, request, context):
-
         decoded, _ = decode(
             bytes(request.payload),
             spec
         )
-
+        authorization_code = ""
         card_number = decoded["2"]
-
-        amount = int(decoded["4"]) / 100
+    
+        amount = (
+            Decimal(decoded["4"])
+            / Decimal("100")
+        )
 
         expiry = decoded["14"]
         expiry_month = int(expiry[:2])
@@ -591,10 +679,13 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             # karta nie istnieje
             if not card:
                 response_code = "05"
-
+            
             else:
                 full_pan = decrypt_pan(card.pan_encrypted)
-
+                available_balance = (
+                Decimal(str(card.balance))
+                - Decimal(str(card.held_balance))
+                )
                 # CVV
                 if not verify_cvv(
                     full_pan,
@@ -614,15 +705,40 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 # status
                 elif card.status != CardStatus.ACTIVE:
                     response_code = "05"
-
+                elif available_balance < amount:
+                    response_code = "51"  # insufficient funds
                 # approved
                 else:
                     response_code = "00"
+                    
+                    authorization_code = secrets.token_hex(3).upper()
+
+                    card.held_balance = (
+                       Decimal(str(card.held_balance))
+                        + amount
+                    )
+
+                    transaction = Transaction(
+                        card_id=card.id,
+                        merchant_id=decoded["42"].strip(),
+                        merchant_name=decoded["42"].strip(),
+                        amount=amount,
+                        currency=decoded.get("49", "PLN"),
+                        status=TransactionStatus.AUTHORIZED,
+                        authorization_code=authorization_code
+                    )
+
+                    db.add(transaction)
+
+                    await db.commit()
 
         response_iso = {
             "t": "0110",
             "39": response_code,
-            "38": secrets.token_hex(3).upper()
+            "38":
+                authorization_code
+                if response_code == "00"
+                else "000000"
         }
 
         raw_response, _ = encode(response_iso, spec)
@@ -630,7 +746,6 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
         return card_pb2.IsoResponse(
             payload=bytes(raw_response)
         )
-
     async def GetFullPan(self, request, context):
         """Zwraca odszyfrowany PAN – tylko dla admina w celach testowych."""
         async with AsyncSessionLocal() as db:
@@ -653,10 +768,190 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 expiry_year=card.expiry_year,
             )
 
+async def process_settlements():
+
+    async with AsyncSessionLocal() as db:
+
+        result = await db.execute(
+            select(Transaction).where(
+                Transaction.status
+                == TransactionStatus.AUTHORIZED
+            )
+        )
+
+        transactions = result.scalars().all()
+
+        if not transactions:
+            logger.info(
+                "No transactions to settle"
+            )
+            return
+
+        logger.info(
+            f"Settlement batch: "
+            f"{len(transactions)} tx"
+        )
+
+        for tx in transactions:
+
+            card_result = await db.execute(
+                select(Card).where(
+                    Card.id == tx.card_id
+                )
+            )
+
+            card = (
+                card_result
+                .scalar_one_or_none()
+            )
+
+            if not card:
+                continue
+
+            fees = calculate_msc(
+                Decimal(str(tx.amount))
+            )
+
+            tx_fee = TransactionFee(
+                transaction_id=tx.id,
+                interchange_fee=
+                    fees["interchange_fee"],
+                scheme_fee=
+                    fees["scheme_fee"],
+                acquirer_fee=
+                    fees["acquirer_fee"],
+                total_fee=
+                    fees["total_fee"]
+            )
+
+            db.add(tx_fee)
+
+            amount = Decimal(
+                str(tx.amount)
+            )
+
+            card.balance = (
+                Decimal(str(card.balance))
+                - amount
+            )
+
+            card.held_balance = (
+                Decimal(
+                    str(card.held_balance)
+                )
+                - amount
+            )
+
+            tx.status = (
+                TransactionStatus
+                .SETTLED
+            )
+
+            tx.settled_at = (
+                datetime.utcnow()
+            )
+
+            await asyncio.to_thread(
+                archive_record,
+                {
+                    "transaction_id":
+                        str(tx.id),
+
+                    "merchant_id":
+                        tx.merchant_id,
+
+                    "merchant_name":
+                        tx.merchant_name,
+
+                    "amount":
+                        str(tx.amount),
+
+                    "currency":
+                        tx.currency,
+
+                    "authorization_code":
+                        tx.authorization_code,
+
+                    "fees": {
+                        "interchange":
+                            str(
+                                fees[
+                                    "interchange_fee"
+                                ]
+                            ),
+
+                        "scheme":
+                            str(
+                                fees[
+                                    "scheme_fee"
+                                ]
+                            ),
+
+                        "acquirer":
+                            str(
+                                fees[
+                                    "acquirer_fee"
+                                ]
+                            ),
+
+                        "total":
+                            str(
+                                fees[
+                                    "total_fee"
+                                ]
+                            )
+                    },
+
+                    "status":
+                        "SETTLED",
+
+                    "settled_at":
+                        datetime.utcnow()
+                        .isoformat()
+                },
+
+                (
+                    "settlements/"
+                    f"{datetime.utcnow().date()}/"
+                    f"txn-{tx.id}.json"
+                )
+            )
+
+            logger.info(
+                f"SETTLED tx={tx.id} "
+                f"amount={tx.amount}"
+            )
+
+        await db.commit()
+
+
+async def settlement_worker():
+
+    logger.info(
+        "Settlement worker "
+        f"started "
+        f"({SETTLEMENT_INTERVAL_SECONDS}s)"
+    )
+
+    while True:
+
+        try:
+            await asyncio.sleep(
+                SETTLEMENT_INTERVAL_SECONDS
+            )
+
+            await process_settlements()
+
+        except Exception as e:
+            logger.exception(
+                f"Settlement error: {e}"
+            )
+
 async def serve():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await seed_bank_api_keys()
+    await seed_test_cards()
     await asyncio.to_thread(init_minio_bucket)
     server = aio.server()
     card_pb2_grpc.add_CardProviderServicer_to_server(CardProviderServicer(), server)
@@ -672,7 +967,8 @@ from app.iso_socket_server import start_socket_server
 async def run_all():
     await asyncio.gather(
         serve(),
-        start_socket_server()
+        start_socket_server(),
+        settlement_worker()
     )
 
 
