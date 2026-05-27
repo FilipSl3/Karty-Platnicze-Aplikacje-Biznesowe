@@ -26,7 +26,7 @@ from decimal import Decimal
 
 from app.models import TransactionFee
 from app.msc import calculate_msc
-
+import httpx
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,49 @@ PAN_ENCRYPTION_KEY = os.getenv("PAN_ENCRYPTION_KEY", "karty-platnicze-key-2026")
 CARD_VERIFICATION_KEY = os.getenv("CARD_VERIFICATION_KEY", "cvk-secret-key-2026")
 
 SETTLEMENT_INTERVAL_SECONDS = int(os.getenv("SETTLEMENT_INTERVAL_SECONDS","86400"))
+
+BANK_CAPTURE_URLS = {
+    "POLISH_BANK_A":
+        os.getenv(
+            "BANK_CAPTURE_URL_POLISH_BANK_A"
+        ),
+
+    "POLISH_BANK_B":
+        os.getenv(
+            "BANK_CAPTURE_URL_POLISH_BANK_B"
+        ),
+
+    "EURO_BANK_A":
+        os.getenv(
+            "BANK_CAPTURE_URL_EURO_BANK_A"
+        ),
+
+    "EURO_BANK_B":
+        os.getenv(
+            "BANK_CAPTURE_URL_EURO_BANK_B"
+        ),
+
+    "UK_BANK_A":
+        os.getenv(
+            "BANK_CAPTURE_URL_UK_BANK_A"
+        ),
+
+    "UK_BANK_B":
+        os.getenv(
+            "BANK_CAPTURE_URL_UK_BANK_B"
+        ),
+
+    "US_BANK_A":
+        os.getenv(
+            "BANK_CAPTURE_URL_US_BANK_A"
+        ),
+
+    "US_BANK_B":
+        os.getenv(
+            "BANK_CAPTURE_URL_US_BANK_B"
+        )
+}
+
 # Maszyna stanów – dozwolone przejścia
 ALLOWED_TRANSITIONS = {
     CardStatus.REQUESTED: [CardStatus.PRODUCING],
@@ -320,6 +363,80 @@ async def seed_test_cards():
             f"CVV: "
             f"{generate_cvv(full_pan, 5, 29)}"
         )
+async def call_bank_capture(
+    card: Card,
+    tx: Transaction
+) -> bool:
+
+    bank_url = (
+        BANK_CAPTURE_URLS
+        .get(card.bank_id)
+    )
+
+    if not bank_url:
+        logger.error(
+            f"No bank URL for "
+            f"{card.bank_id}"
+        )
+        return False
+
+    payload = {
+        "transaction_id":
+            str(tx.id),
+
+        "authorization_code":
+            tx.authorization_code,
+
+        "amount":
+            float(tx.amount),
+
+        "currency":
+            tx.currency,
+
+        "merchant_id":
+            tx.merchant_id,
+
+        "card_token":
+            card.token
+    }
+
+    try:
+        async with (
+            httpx.AsyncClient(
+                timeout=10
+            )
+        ) as client:
+
+            response = (
+                await client.post(
+                    f"{bank_url}/capture",
+                    json=payload
+                )
+            )
+
+            if response.status_code == 200:
+
+                logger.info(
+                    f"CAPTURE OK "
+                    f"tx={tx.id}"
+                )
+
+                return True
+
+            logger.warning(
+                f"CAPTURE FAIL "
+                f"tx={tx.id} "
+                f"status="
+                f"{response.status_code}"
+            )
+
+            return False
+
+    except Exception as e:
+        logger.exception(
+            f"Capture error: {e}"
+        )
+        return False
 class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
     
     async def CreateCard(self, request, context):
@@ -724,7 +841,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                         merchant_name=decoded["42"].strip(),
                         amount=amount,
                         currency=decoded.get("49", "PLN"),
-                        status=TransactionStatus.AUTHORIZED,
+                        status=TransactionStatus.PENDING,
                         authorization_code=authorization_code
                     )
 
@@ -767,7 +884,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 expiry_month=card.expiry_month,
                 expiry_year=card.expiry_year,
             )
-
+#settlement
 async def process_settlements():
 
     async with AsyncSessionLocal() as db:
@@ -775,7 +892,7 @@ async def process_settlements():
         result = await db.execute(
             select(Transaction).where(
                 Transaction.status
-                == TransactionStatus.AUTHORIZED
+                == TransactionStatus.PENDING
             )
         )
 
@@ -808,6 +925,37 @@ async def process_settlements():
             if not card:
                 continue
 
+            # CAPTURED
+            tx.status = (
+                TransactionStatus
+                .CAPTURED
+            )
+
+            await db.flush()
+
+            # /capture do banku
+            capture_ok = (
+                await call_bank_capture(
+                    card,
+                    tx
+                )
+            )
+
+            if not capture_ok:
+                logger.warning(
+                    f"Capture failed "
+                    f"tx={tx.id}"
+                )
+
+                # wracamy do PENDING
+                tx.status = (
+                    TransactionStatus
+                    .PENDING
+                )
+
+                continue
+
+            # MSC
             fees = calculate_msc(
                 Decimal(str(tx.amount))
             )
@@ -816,10 +964,13 @@ async def process_settlements():
                 transaction_id=tx.id,
                 interchange_fee=
                     fees["interchange_fee"],
+
                 scheme_fee=
                     fees["scheme_fee"],
+
                 acquirer_fee=
                     fees["acquirer_fee"],
+
                 total_fee=
                     fees["total_fee"]
             )
@@ -830,6 +981,7 @@ async def process_settlements():
                 str(tx.amount)
             )
 
+            # finalne obciążenie
             card.balance = (
                 Decimal(str(card.balance))
                 - amount
@@ -842,6 +994,7 @@ async def process_settlements():
                 - amount
             )
 
+            # SETTLED
             tx.status = (
                 TransactionStatus
                 .SETTLED
@@ -923,8 +1076,6 @@ async def process_settlements():
             )
 
         await db.commit()
-
-
 async def settlement_worker():
 
     logger.info(

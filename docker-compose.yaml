@@ -40,7 +40,18 @@ services:
       ACQUIRER_FEE_PERCENT: 0.2
 
       SETTLEMENT_INTERVAL_SECONDS: "30" #"86400" jakb bysmy chcieli po dniu a nie po 30 sekundach
+      
+      BANK_CAPTURE_URL_POLISH_BANK_A: "http://polish-bank-a:8000"
+      BANK_CAPTURE_URL_POLISH_BANK_B: "http://polish-bank-b:8000"
 
+      BANK_CAPTURE_URL_EURO_BANK_A: "http://euro-bank-a:8000"
+      BANK_CAPTURE_URL_EURO_BANK_B: "http://euro-bank-b:8000"
+
+      BANK_CAPTURE_URL_UK_BANK_A: "http://uk-bank-a:8000"
+      BANK_CAPTURE_URL_UK_BANK_B: "http://uk-bank-b:8000"
+
+      BANK_CAPTURE_URL_US_BANK_A: "http://us-bank-a:8000"
+      BANK_CAPTURE_URL_US_BANK_B: "http://us-bank-b:8000"
     depends_on:
       postgres-db:
         condition: service_healthy
@@ -119,8 +130,9 @@ networks:
       config:
         - subnet: 172.20.0.0/24
   cards-backend:
+    name: cards-backend
     driver: bridge
-    internal: true
+    #internal: true
     ipam:
       config:
         - subnet: 172.21.0.0/24

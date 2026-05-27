@@ -262,7 +262,7 @@ async def handle_client(reader, writer):
 
                         status=
                             TransactionStatus
-                            .AUTHORIZED,
+                            .PENDING,
 
                         authorization_code=
                             authorization_code

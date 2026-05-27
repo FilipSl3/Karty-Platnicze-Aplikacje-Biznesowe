@@ -41,7 +41,8 @@ Moduł **Karty Płatnicze** symuluje działanie systemu typu **Visa/Mastercard**
 - Wydawanie kart wirtualnych, fizycznych i prepaid
 - Maszyna stanów karty: `REQUESTED → PRODUCING → SHIPPED → ACTIVE → BLOCKED`
 - Autoryzacja transakcji przez protokół ISO 8583 (socket TCP)
-- Clearing i Settlement w cyklu dobowym
+- Authorization hold (blokada środków przed settlementem)
+- Clearing i Settlement w konfigurowalnym cyklu batchowym (domyślnie dobowym)
 - MSC (Merchant Service Charge) z podziałem prowizji
 - Archiwizacja transakcji w MinIO (WORM / Object Lock)
 - Emulacja terminala płatniczego (POS)
@@ -235,6 +236,80 @@ Prowizja pobierana od każdej transakcji, dzielona na 3 składowe:
 | Scheme Fee | Card Provider (my) | ~0.3% |
 | Acquirer Fee | Payment Gateway | ~0.2% |
 
+#### Obliczanie MSC
+
+Po wykonaniu settlementu system automatycznie wylicza Merchant Service Charge (MSC).
+
+Przykład dla transakcji `50 PLN`:
+
+| Składowa | Stawka | Kwota |
+|---|---:|---:|
+| Interchange Fee | 1.5% | 0.75 PLN |
+| Scheme Fee | 0.3% | 0.15 PLN |
+| Acquirer Fee | 0.2% | 0.10 PLN |
+| **Łącznie MSC** | **2.0%** | **1.00 PLN** |
+
+Stawki są konfigurowalne przez zmienne środowiskowe:
+
+```yaml
+INTERCHANGE_FEE_PERCENT=1.5
+SCHEME_FEE_PERCENT=0.3
+ACQUIRER_FEE_PERCENT=0.2
+```
+
+MSC zapisywany jest w tabeli `transaction_fees` i powiązany z konkretną transakcją settlementową.
+
+### Settlement i blokada środków (Authorization Hold)
+
+W systemach kart płatniczych środki nie są pobierane natychmiast po autoryzacji.
+
+Proces wygląda następująco:
+
+1. **Authorization**
+   - sprawdzana jest karta (PAN, CVV, expiry)
+   - weryfikowany jest status karty (`ACTIVE`)
+   - sprawdzane są dostępne środki
+   - środki zostają **zablokowane** (`held_balance`)
+
+2. **Settlement**
+   - wykonywany przez scheduler batchowy
+    - transakcje `PENDING` są pobierane przez settlement batch.
+
+        1. `PENDING → CAPTURED`
+        2. wywołanie bankowego `/capture`
+        3. blokada środków (`held_balance`)
+   zamieniana jest na faktyczne
+   obciążenie salda
+        4. `CAPTURED → SETTLED`
+        5. obliczenie MSC
+        6. archiwizacja WORM (MinIO)
+   - środki są pobierane z salda
+   - blokada środków jest usuwana
+   - obliczany jest MSC
+   - transakcja archiwizowana jest w MinIO WORM
+
+Przykład:
+
+```text
+Saldo początkowe:     1000 PLN
+Authorization:        50 PLN
+
+Po auth:
+balance = 1000
+held_balance = 50
+
+Po settlement:
+balance = 950
+held_balance = 0
+```
+
+Scheduler settlementu jest konfigurowalny przez zmienną środowiskową:
+
+```yaml
+SETTLEMENT_INTERVAL_SECONDS=86400
+```
+
+Domyślnie odpowiada to **daily settlement (T+1 / EOD)**, jednak dla środowiska demonstracyjnego może zostać skrócony np. do `10–30 sekund`, aby umożliwić prezentację pełnego lifecycle transakcji podczas zajęć.
 ---
 
 ## Bezpieczeństwo i kryptografia
@@ -826,7 +901,42 @@ Możliwe `decline_reason`: `INSUFFICIENT_FUNDS`, `ACCOUNT_BLOCKED`, `LIMIT_EXCEE
 // Response:
 { "status": "REFUNDED" }
 ```
+## Docker Networking – Integracja Banków
 
+Card Provider komunikuje się z bankami
+przez Docker internal network.
+
+Bank musi być osiągalny pod nazwą
+kontenera/service name:
+
+```text
+http://polish-bank-a:8000/capture
+```
+
+Uwaga:
+
+Port hosta (`8081`, `8082`, itd.)
+nie jest używany przez Card Provider.
+
+Przykład:
+
+```yaml
+polish-bank-a:
+  ports:
+    - "8081:8000"
+```
+
+Card Provider wywoła:
+
+```text
+http://polish-bank-a:8000/capture
+```
+
+nie:
+
+```text
+http://localhost:8081/capture
+```
 ### 7. Kody odpowiedzi autoryzacji
 
 | Kod | Znaczenie |
@@ -862,23 +972,25 @@ Możliwe `decline_reason`: `INSUFFICIENT_FUNDS`, `ACCOUNT_BLOCKED`, `LIMIT_EXCEE
 | HMAC-SHA256 auth + replay protection | Filip | ✅ Zrobione |
 | Doładowanie karty prepaid | Filip | ✅ Zrobione |
 | Panel admina (React) | Filip | ✅ Zrobione |
-| AuthorizeTransaction / ISO 8583 socket | Kolega | 🔄 W trakcie |
-| REST API Terminal POS | Kolega | 🔄 W trakcie |
-| MSC – Merchant Service Charge | Kolega | 🔄 W trakcie |
-| Clearing & Settlement (nocny job) | Kolega | 🔄 W trakcie |
-| Panel terminala (POS UI) | Kolega | 🔄 W trakcie |
+| AuthorizeTransaction / ISO 8583 socket | Michał | ✅ Zrobione|
+| REST API Terminal POS (Payment Gateway authorize API) | Michał | ✅ Zrobione |
+| Panel terminala (POS UI / emulator) | Michał | 🔄 W trakcie |
+| MSC – Merchant Service Charge | Michał | ✅ Zrobione |
+| Authorization Hold (held_balance) | Michał | ✅ Zrobione |
+| Clearing & Settlement (nocny job) | Michał | ✅ Zrobione |
+| Panel terminala (POS UI) | Michał | 🔄 W trakcie |
 
 ### Etap 2 – Ocena 4.0
 
 | Zadanie | Kto | Status |
 |---|---|---|
 | Archiwizacja MinIO (WORM / Object Lock) | Filip | ⏳ W toku |
-| Płatności offline (floor limit) | Kolega | ⏳ Planowane |
+| Płatności offline (floor limit) | Michał | ⏳ Planowane |
 
 ### Etap 3 – Ocena 5.0
 
 | Zadanie | Kto | Status |
 |---|---|---|
-| Mechanizm Chargeback | Kolega | ⏳ Planowane |
+| Mechanizm Chargeback | Michał | ⏳ Planowane |
 | Segmentacja sieci Docker (frontend/backend) | Filip | ✅ Zrobione |
 | Brama WireGuard VPN do sieci wewnętrznej | Filip | ✅ Zrobione |

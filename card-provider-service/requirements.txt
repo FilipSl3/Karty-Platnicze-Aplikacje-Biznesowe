@@ -12,3 +12,4 @@ psycopg2-binary
 cryptography
 pyiso8583
 minio
+httpx==0.28.1
