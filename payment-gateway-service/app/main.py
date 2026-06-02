@@ -14,7 +14,7 @@ from app.iso_spec import spec
 from app.iso_socket_client import send_iso
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-
+from pydantic import BaseModel, Field
 
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
 from app.grpc_client import (
@@ -125,6 +125,14 @@ Każde żądanie banku musi zawierać:
 
 ### Ważne:
 Tylko karty w statusie **ACTIVE** mogą realizować płatności.
+
+### Emulator POS
+
+Dostępny pod adresem:
+
+http://localhost:8072/pos
+
+Pozwala testować płatności kartowe z poziomu przeglądarki.
     """,
     version="1.0.0",
     lifespan=lifespan
@@ -160,14 +168,45 @@ class TopUpRequest(BaseModel):
 
 
 class AuthorizeRequest(BaseModel):
-    card_number: str
-    expiry_month: int
-    expiry_year: int
-    cvv: str
-    amount: float
-    currency: str = "PLN"
-    merchant_id: str = ""
-    merchant_name: str = ""
+    card_number: str = Field(
+        example="4100013395241296",
+        description="16-cyfrowy numer karty"
+    )
+
+    expiry_month: int = Field(
+        example=5,
+        description="Miesiąc ważności"
+    )
+
+    expiry_year: int = Field(
+        example=29,
+        description="Rok ważności (YY)"
+    )
+
+    cvv: str = Field(
+        example="889",
+        description="Kod CVV"
+    )
+
+    amount: float = Field(
+        example=50.00,
+        description="Kwota transakcji"
+    )
+
+    currency: str = Field(
+        default="PLN",
+        example="PLN"
+    )
+
+    merchant_id: str = Field(
+        default="SHOP_001",
+        example="SHOP_001"
+    )
+
+    merchant_name: str = Field(
+        default="Test Shop",
+        example="Test Shop"
+    )
 
 
 # --- Endpointy systemowe ---
@@ -507,8 +546,25 @@ async def get_full_pan(
 
 # --- Płatności ---
 
-@app.post("/api/v1/payments/authorize", tags=["Płatności"],
-          summary="Autoryzacja płatności kartą (POS Terminal)")
+@app.post(
+    "/api/v1/payments/authorize",
+    tags=["Płatności"],
+    summary="Autoryzacja płatności kartą (POS Terminal)",
+    description="""
+Symulacja terminala płatniczego POS.
+
+Przebieg:
+1. Walidacja numeru karty algorytmem Luhna
+2. Budowa komunikatu ISO8583
+3. Wysłanie komunikatu TCP Socket do Card Provider
+4. Weryfikacja PAN, CVV, daty ważności i statusu karty
+5. Zwrot decyzji APPROVED / DECLINED
+
+Uwaga:
+Ten endpoint służy do testowania terminala POS.
+Banki nie wywołują go bezpośrednio.
+"""
+)
 async def authorize_payment(body: AuthorizeRequest):
     """
     Symuluje terminal płatniczy POS.
@@ -585,7 +641,21 @@ async def authorize_payment(body: AuthorizeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 """terminal gui"""    
-@app.get("/pos", response_class=HTMLResponse, tags=["POS"])
+@app.get(
+    "/pos",
+    response_class=HTMLResponse,
+    tags=["POS"],
+    summary="Web POS Terminal Emulator",
+    description="""
+Przeglądarkowy emulator terminala płatniczego.
+
+Pozwala wykonać testową płatność kartą bez używania Postmana
+ani Swagger UI.
+
+Adres:
+http://localhost:8072/pos
+"""
+)
 async def pos_terminal(request: Request):
     return templates.TemplateResponse(
         request=request,
