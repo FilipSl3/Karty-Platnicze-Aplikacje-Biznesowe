@@ -6,3 +6,4 @@ protobuf
 pydantic
 python-dotenv
 pyiso8583
+jinja2

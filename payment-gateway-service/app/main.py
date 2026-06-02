@@ -12,7 +12,8 @@ import json
 from iso8583 import encode, decode
 from app.iso_spec import spec
 from app.iso_socket_client import send_iso
-
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
@@ -128,7 +129,7 @@ Tylko karty w statusie **ACTIVE** mogą realizować płatności.
     version="1.0.0",
     lifespan=lifespan
 )
-
+templates = Jinja2Templates(directory="templates")
 
 # --- Modele requestów ---
 
@@ -583,3 +584,10 @@ async def authorize_payment(body: AuthorizeRequest):
         raise HTTPException(status_code=500, detail=f"gRPC error: {e.details()}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/pos", response_class=HTMLResponse, tags=["POS"])
+async def pos_terminal(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="pos.html"
+    )
