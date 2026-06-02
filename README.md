@@ -728,6 +728,44 @@ Każdy bank otrzymuje unikalny klucz API i sekret HMAC przy podpisaniu umowy z p
 > Pełna dokumentacja interaktywna: **http://localhost:8072/docs**
 
 ### Endpointy REST (Payment Gateway :8072)
+### Terminal POS (Web Emulator)
+
+Payment Gateway udostępnia prosty terminal płatniczy dostępny przez przeglądarkę:
+
+```
+http://localhost:8072/pos
+```
+
+Terminal pozwala zasymulować płatność kartą bez użycia Postmana lub Swaggera.
+
+Dostępne pola:
+
+* Numer karty (PAN)
+* Miesiąc ważności
+* Rok ważności
+* CVV
+* Kwota
+
+Po wysłaniu formularza wykonywane jest wywołanie:
+
+```
+POST /api/v1/payments/authorize
+```
+
+Wynik wyświetlany jest jako:
+
+* APPROVED – autoryzacja zakończona sukcesem
+* DECLINED – autoryzacja odrzucona
+* ERROR – błąd walidacji danych (np. niepoprawny numer karty)
+
+Przykładowe dane testowe:
+
+```
+PAN:    4100013395241296
+Expiry: 05/29
+CVV:    889
+Amount: 50.00
+```
 
 #### Karty
 
@@ -952,6 +990,119 @@ http://localhost:8081/capture
 | `BANK_TIMEOUT` | Bank nie odpowiedział w czasie |
 
 ---
+### 8. Testy integracyjne dla banków
+
+Po podłączeniu banku do systemu kart należy wykonać następujące testy.
+
+#### Test 1 – Wydanie karty
+
+Wywołaj:
+
+```
+POST /api/v1/cards/issue
+```
+
+Oczekiwany rezultat:
+
+* status 200
+* zwrócony token karty
+* zwrócony pełny PAN
+* zwrócony CVV
+
+#### Test 2 – Aktywacja karty
+
+Dla kart PHYSICAL lub PREPAID:
+
+```
+POST /api/v1/cards/{token}/activate
+```
+
+Oczekiwany rezultat:
+
+```
+status = ACTIVE
+```
+
+#### Test 3 – Autoryzacja poprawnej płatności
+
+W terminalu POS:
+
+```
+http://localhost:8072/pos
+```
+
+Wprowadź poprawne dane karty.
+
+Oczekiwany rezultat:
+
+```
+APPROVED
+```
+
+#### Test 4 – Niepoprawny numer karty
+
+Zmodyfikuj ostatnią cyfrę PAN.
+
+Oczekiwany rezultat:
+
+```
+ERROR
+Invalid card number (Luhn failed)
+```
+
+#### Test 5 – Niepoprawny CVV
+
+Wprowadź błędny kod CVV.
+
+Oczekiwany rezultat:
+
+```
+DECLINED
+```
+
+#### Test 6 – Zablokowana karta
+
+Zmień status karty:
+
+```
+PATCH /api/v1/cards/{token}/status
+{
+  "status": "BLOCKED"
+}
+```
+
+Następnie wykonaj płatność.
+
+Oczekiwany rezultat:
+
+```
+DECLINED
+```
+
+#### Test 7 – Settlement
+
+Po wykonaniu autoryzacji sprawdź tabelę transactions.
+
+Po uruchomieniu settlementu:
+
+* status transakcji zmienia się na SETTLED
+* obliczane jest MSC
+* tworzony jest wpis w transaction_fees
+
+Integrację można uznać za poprawną, jeśli wszystkie powyższe testy zakończą się oczekiwanym wynikiem.
+
+### Czy bank musi implementować ISO 8583?
+
+Nie.
+
+ISO 8583 jest używane wyłącznie wewnątrz modułu kart płatniczych pomiędzy:
+
+- Payment Gateway
+- Card Provider
+
+Bank komunikuje się z modułem kart wyłącznie przez REST API oraz podpisy HMAC-SHA256.
+
+Dzięki temu integracja nie wymaga znajomości ISO 8583 ani implementacji komunikacji socketowej.
 
 ## Plan rozwoju
 
@@ -974,11 +1125,11 @@ http://localhost:8081/capture
 | Panel admina (React) | Filip | ✅ Zrobione |
 | AuthorizeTransaction / ISO 8583 socket | Michał | ✅ Zrobione|
 | REST API Terminal POS (Payment Gateway authorize API) | Michał | ✅ Zrobione |
-| Panel terminala (POS UI / emulator) | Michał | 🔄 W trakcie |
+| Panel terminala (POS UI / emulator) | Michał | ✅ Zrobione |
 | MSC – Merchant Service Charge | Michał | ✅ Zrobione |
 | Authorization Hold (held_balance) | Michał | ✅ Zrobione |
 | Clearing & Settlement (nocny job) | Michał | ✅ Zrobione |
-| Panel terminala (POS UI) | Michał | 🔄 W trakcie |
+| Panel terminala (POS UI) | Michał | ✅ Zrobione |
 
 ### Etap 2 – Ocena 4.0
 
