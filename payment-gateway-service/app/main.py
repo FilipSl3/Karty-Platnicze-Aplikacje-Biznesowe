@@ -584,7 +584,7 @@ async def authorize_payment(body: AuthorizeRequest):
         raise HTTPException(status_code=500, detail=f"gRPC error: {e.details()}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+"""terminal gui"""    
 @app.get("/pos", response_class=HTMLResponse, tags=["POS"])
 async def pos_terminal(request: Request):
     return templates.TemplateResponse(

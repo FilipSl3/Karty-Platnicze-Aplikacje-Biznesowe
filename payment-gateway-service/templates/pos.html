@@ -126,18 +126,27 @@ document
         {
             method: "POST",
             headers: {
-                "Content-Type":
-                    "application/json"
+                "Content-Type": "application/json"
             },
             body: JSON.stringify(body)
         }
     );
 
-    const data =
-        await response.json();
+    const data = await response.json();
 
     const result =
         document.getElementById("result");
+
+    if (!response.ok) {
+
+        result.innerHTML =
+            `<h2 class="declined">
+                ERROR
+            </h2>
+            <p>${data.detail}</p>`;
+
+        return;
+    }
 
     if (data.approved) {
 
