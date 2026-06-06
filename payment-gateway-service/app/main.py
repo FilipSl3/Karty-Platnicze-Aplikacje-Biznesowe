@@ -35,6 +35,15 @@ BANK_HMAC_SECRETS = {
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "admin-secret-key-2026")
 SIGNATURE_MAX_AGE_SECONDS = 30
 
+def require_bank_auth(x_api_key, x_signature, x_timestamp, body: dict) -> None:
+    secret = BANK_HMAC_SECRETS.get(x_api_key)
+    if not secret:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    if not x_signature or not x_timestamp:
+        raise HTTPException(status_code=401, detail="X-Signature and X-Timestamp required")
+    valid, reason = verify_bank_signature(body, x_signature, x_timestamp, secret)
+    if not valid:
+        raise HTTPException(status_code=401, detail=f"Signature verification failed: {reason}")
 
 def verify_bank_signature(body: dict, signature: str, timestamp: str, secret: str) -> tuple[bool, str]:
     """Weryfikuje podpis HMAC-SHA256 przysłany przez bank."""

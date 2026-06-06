@@ -11,7 +11,7 @@ import time
 import json
 from datetime import datetime
 from grpc import aio
-from sqlalchemy import select
+from sqlalchemy import select, desc, update
 from cryptography.fernet import Fernet
 import base64
 
@@ -646,25 +646,24 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
         Doładowanie karty prepaid. Tylko dla kart typu PREPAID w statusie ACTIVE.
         """
         async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Card).where(Card.token == request.card_token))
+            result = await db.execute(
+                select(Card).where(Card.token == request.card_token).with_for_update()
+            )
             card = result.scalar_one_or_none()
             if not card:
                 return card_pb2.TopUpResponse(success=False, message="Card not found", new_balance=0)
             if card.card_type != CardType.PREPAID:
-                return card_pb2.TopUpResponse(
-                    success=False, message="Only PREPAID cards can be topped up", new_balance=float(card.balance)
-                )
+                return card_pb2.TopUpResponse(success=False, message="Only PREPAID", new_balance=float(card.balance))
             if card.status != CardStatus.ACTIVE:
-                return card_pb2.TopUpResponse(
-                    success=False, message=f"Card is {card.status.value}, must be ACTIVE", new_balance=float(card.balance)
-                )
+                return card_pb2.TopUpResponse(success=False, message=f"Card is {card.status.value}", new_balance=float(card.balance))
             if request.amount <= 0:
-                return card_pb2.TopUpResponse(
-                    success=False, message="Amount must be positive", new_balance=float(card.balance)
-                )
-            card.balance = float(card.balance) + request.amount
+                return card_pb2.TopUpResponse(success=False, message="Amount must be positive", new_balance=float(card.balance))
+            await db.execute(
+                update(Card).where(Card.token == request.card_token)
+                .values(balance=Card.balance + Decimal(str(request.amount)))
+            )
             await db.commit()
-            logger.info(f"Prepaid card {card.token} topped up by {request.amount}. New balance: {card.balance}")
+            await db.refresh(card)
             return card_pb2.TopUpResponse(
                 success=True,
                 message=f"Top-up successful. Added {request.amount} {request.currency}",
@@ -677,16 +676,21 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             card = result.scalar_one_or_none()
             if not card:
                 return card_pb2.BlockCardResponse(success=False, message="Card not found")
+            allowed = ALLOWED_TRANSITIONS.get(card.status, [])
+            if CardStatus.BLOCKED not in allowed:
+                return card_pb2.BlockCardResponse(
+                    success=False,
+                    message=f"Cannot block from {card.status.value}"
+                )
             old_status = card.status.value
             card.status = CardStatus.BLOCKED
             db.add(CardStatusHistory(
-                card_id=card.id,
-                old_status=old_status,
+                card_id=card.id, old_status=old_status,
                 new_status=CardStatus.BLOCKED.value,
                 changed_by=request.reason or "admin",
             ))
             await db.commit()
-            return card_pb2.BlockCardResponse(success=True, message="Card blocked")
+            return card_pb2.BlockCardResponse(success=True, message=f"Card blocked (was {old_status})")
 
     async def UnblockCard(self, request, context):
         async with AsyncSessionLocal() as db:
@@ -694,16 +698,33 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             card = result.scalar_one_or_none()
             if not card:
                 return card_pb2.UnblockCardResponse(success=False, message="Card not found")
+            if card.status != CardStatus.BLOCKED:
+                return card_pb2.UnblockCardResponse(
+                    success=False, message=f"Card not blocked (is {card.status.value})"
+                )
+            hist = await db.execute(
+                select(CardStatusHistory)
+                .where(CardStatusHistory.card_id == card.id)
+                .order_by(CardStatusHistory.changed_at.desc()).limit(5)
+            )
+            restore = CardStatus.ACTIVE
+            for e in hist.scalars().all():
+                if e.new_status == "BLOCKED" and e.old_status:
+                    try:
+                        prev = CardStatus(e.old_status)
+                        if prev in (CardStatus.ACTIVE, CardStatus.SHIPPED):
+                            restore = prev
+                    except ValueError:
+                        pass
+                    break
             old_status = card.status.value
-            card.status = CardStatus.ACTIVE
+            card.status = restore
             db.add(CardStatusHistory(
-                card_id=card.id,
-                old_status=old_status,
-                new_status=CardStatus.ACTIVE.value,
-                changed_by="admin",
+                card_id=card.id, old_status=old_status,
+                new_status=restore.value, changed_by="admin",
             ))
             await db.commit()
-            return card_pb2.UnblockCardResponse(success=True, message="Card unblocked")
+            return card_pb2.UnblockCardResponse(success=True, message=f"Unblocked → {restore.value}")
 
     async def AuthorizeTransaction(self, request, context):
         """
