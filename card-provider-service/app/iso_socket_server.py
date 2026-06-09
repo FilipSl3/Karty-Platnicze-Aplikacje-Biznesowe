@@ -219,8 +219,9 @@ async def handle_client(reader, writer):
                     response_code = "05"
 
                 elif (
-                    available_balance
-                    < amount
+                    card.card_type == "PREPAID"
+                    and
+                    available_balance < amount
                 ):
                     response_code = "51"
 
@@ -232,15 +233,15 @@ async def handle_client(reader, writer):
                         .token_hex(3)
                         .upper()
                     )
-
-                    card.held_balance = (
-                        Decimal(
-                            str(
-                                card.held_balance
+                    if card.card_type == "PREPAID":
+                        card.held_balance = (
+                            Decimal(
+                                str(
+                                    card.held_balance
+                                )
                             )
+                            + amount
                         )
-                        + amount
-                    )
 
                     transaction = Transaction(
                         card_id=card.id,

@@ -592,12 +592,14 @@ async def authorize_payment(body: AuthorizeRequest):
         async with grpc.aio.insecure_channel(GRPC_URL) as channel:
 
             stub = card_pb2_grpc.CardProviderStub(channel)
+            
+            expiry_year = body.expiry_year % 100
 
             iso_message = {
                 "t": "0100",
                 "2": card_number,
                 "4": str(int(body.amount * 100)).zfill(12),
-                "14": f"{body.expiry_month:02d}{body.expiry_year:02d}",
+                "14": f"{body.expiry_month:02d}{expiry_year:02d}",
                 "41": "POS00001".ljust(8),
                 "42": body.merchant_id[:15].ljust(15),
                 "49": body.currency,
