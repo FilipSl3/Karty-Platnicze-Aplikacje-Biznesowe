@@ -37,7 +37,7 @@ Moduł **Karty Płatnicze** symuluje działanie systemu typu **Visa/Mastercard**
 - Generowanie 16-cyfrowego numeru karty (PAN) z algorytmem Luhna i prefiksem BIN
 - Generowanie CVV kryptograficznie (HMAC-SHA256) bez przechowywania w bazie
 - Deterministyczny hash PAN do wykrywania kolizji i wyszukiwania (`pan_hash`)
-- Szyfrowanie PAN w bazie danych (AES-256 przez Fernet)
+- Szyfrowanie PAN w bazie danych (AES-128 przez Fernet)
 - Wydawanie kart wirtualnych, fizycznych i prepaid
 - Maszyna stanów karty: `REQUESTED → PRODUCING → SHIPPED → ACTIVE → BLOCKED`
 - Autoryzacja transakcji przez protokół ISO 8583 (socket TCP)
@@ -91,7 +91,7 @@ Gateway jest **mostem** między oboma sieciami. Admin-panel jest **tylko** na fr
 ### Mikroserwisy
 
 #### Card Provider Service (tylko sieć wewnętrzna – brak ekspozycji na host)
-- Generowanie i szyfrowanie PAN (Fernet AES-256)
+- Generowanie i szyfrowanie PAN (Fernet AES-128)
 - Generowanie CVV kryptograficznie (HMAC-SHA256 + CVK)
 - Autoryzacja transakcji przez ISO 8583 socket (port 9000 wewnętrzny)
 - Maszyna stanów karty
@@ -330,7 +330,7 @@ CVV = HMAC-SHA256(PAN + MMYY + "101", CARD_VERIFICATION_KEY)[:3 cyfry]
 
 **CVV nie jest przechowywany w bazie** – obliczany ponownie przy każdej weryfikacji. Nawet wyciek bazy nie ujawnia CVV.
 
-### Szyfrowanie PAN (AES-256)
+### Szyfrowanie PAN (AES-128)
 
 ```
 W bazie:          pan_encrypted = Fernet.encrypt(full_pan, PAN_ENCRYPTION_KEY)
@@ -441,7 +441,7 @@ sequenceDiagram
     B->>GW: POST /api/v1/cards/issue\nX-API-Key + X-Signature + X-Timestamp
     GW->>GW: Weryfikacja X-API-Key\nWeryfikacja X-Signature (HMAC)\nSprawdzenie X-Timestamp (max 30s)
     GW->>CP: gRPC CreateCard()\n{api_key, user_id, card_type, ...}
-    CP->>CP: Generowanie PAN (Luhn)\nGenerowanie CVV (HMAC)\nSzyfrowanie PAN (AES-256)\nGenerowanie pan_hash (HMAC)
+    CP->>CP: Generowanie PAN (Luhn)\nGenerowanie CVV (HMAC)\nSzyfrowanie PAN (AES-128)\nGenerowanie pan_hash (HMAC)
     CP->>CP: Zapis do DB\n{pan_encrypted, pan_hash, masked_pan, expiry}
     CP-->>GW: {full_pan, cvv, expiry, token, status: REQUESTED}
     GW-->>B: {full_pan, cvv, expiry, token}\n⚠️ PAN i CVV tylko raz!
@@ -646,20 +646,20 @@ erDiagram
 
 ## Technologie
 
-| Warstwa | Technologia | Uzasadnienie |
-|---|---|---|
-| Backend | Python 3.11 | Szybki development, bogate biblioteki |
-| Komunikacja kart | gRPC + Protocol Buffers | Typowany kontrakt wewnętrzny |
-| Komunikacja terminali | ISO 8583 (TCP socket) | Standard branżowy dla terminali POS |
-| REST API | FastAPI | Automatyczny Swagger, async, Pydantic |
-| Baza danych | PostgreSQL 16 | ACID – krytyczne przy transakcjach finansowych |
-| Szyfrowanie PAN | Fernet (AES-256) | Standard szyfrowania symetrycznego |
-| Podpis requestów | HMAC-SHA256 | Weryfikacja autentyczności żądań banków |
-| CVV | HMAC-SHA256 + CVK | Kryptograficzne generowanie bez przechowywania |
-| Frontend | React + Vite + Nginx | Panel admina |
+| Warstwa | Technologia              | Uzasadnienie |
+|---|--------------------------|---|
+| Backend | Python 3.11              | Szybki development, bogate biblioteki |
+| Komunikacja kart | gRPC + Protocol Buffers  | Typowany kontrakt wewnętrzny |
+| Komunikacja terminali | ISO 8583 (TCP socket)    | Standard branżowy dla terminali POS |
+| REST API | FastAPI                  | Automatyczny Swagger, async, Pydantic |
+| Baza danych | PostgreSQL 16            | ACID – krytyczne przy transakcjach finansowych |
+| Szyfrowanie PAN | Fernet (AES-128)          | Standard szyfrowania symetrycznego |
+| Podpis requestów | HMAC-SHA256              | Weryfikacja autentyczności żądań banków |
+| CVV | HMAC-SHA256 + CVK        | Kryptograficzne generowanie bez przechowywania |
+| Frontend | React + Vite + Nginx     | Panel admina |
 | Archiwizacja | MinIO (Object Lock WORM) | S3-compatible, niemodyfikowalne archiwa |
-| Konteneryzacja | Docker Compose | Izolacja, łatwe uruchomienie |
-| Sieć VPN | WireGuard | Szyfrowany tunel do sieci wewnętrznej |
+| Konteneryzacja | Docker Compose           | Izolacja, łatwe uruchomienie |
+| Sieć VPN | WireGuard                | Szyfrowany tunel do sieci wewnętrznej |
 
 ---
 
@@ -691,16 +691,16 @@ docker compose up --build
 
 ### Zmienne środowiskowe
 
-| Zmienna | Domyślna | Opis |
-|---|---|---|
-| `DATABASE_URL` | `postgresql+asyncpg://...` | Połączenie z PostgreSQL |
-| `GRPC_SERVER_URL` | `card-provider:50051` | Adres Card Provider |
+| Zmienna | Domyślna | Opis                               |
+|---|---|------------------------------------|
+| `DATABASE_URL` | `postgresql+asyncpg://...` | Połączenie z PostgreSQL            |
+| `GRPC_SERVER_URL` | `card-provider:50051` | Adres Card Provider                |
 | `VIRTUAL_CARD_ACTIVATION_DELAY` | `3600` | Auto-aktywacja Virtual w sekundach |
-| `PAN_ENCRYPTION_KEY` | `karty-platnicze-key-2026` | Klucz szyfrowania AES-256 |
-| `CARD_VERIFICATION_KEY` | `cvk-secret-key-2026` | Klucz generowania CVV i pan_hash |
-| `ADMIN_API_KEY` | `admin-secret-key-2026` | Klucz X-Admin-Key |
-| `MINIO_ROOT_USER` | `minio_admin` | Login MinIO |
-| `MINIO_ROOT_PASSWORD` | `minio_admin_2026` | Hasło MinIO |
+| `PAN_ENCRYPTION_KEY` | `karty-platnicze-key-2026` | Klucz szyfrowania AES-128           |
+| `CARD_VERIFICATION_KEY` | `cvk-secret-key-2026` | Klucz generowania CVV i pan_hash   |
+| `ADMIN_API_KEY` | `admin-secret-key-2026` | Klucz X-Admin-Key                  |
+| `MINIO_ROOT_USER` | `minio_admin` | Login MinIO                        |
+| `MINIO_ROOT_PASSWORD` | `minio_admin_2026` | Hasło MinIO                        |
 
 > **DEV TIP:** `VIRTUAL_CARD_ACTIVATION_DELAY=60` w docker-compose.yaml – karta wirtualna aktywuje się po 60 sekundach zamiast 1 godziny.
 
@@ -775,10 +775,10 @@ Amount: 50.00
 | `GET` | `/api/v1/cards` | X-Admin-Key | Lista wszystkich kart |
 | `GET` | `/api/v1/cards/{token}` | — | Szczegóły karty |
 | `GET` | `/api/v1/cards/{token}/full-pan` | X-Admin-Key | Pełny PAN (tylko DEV) |
-| `PATCH` | `/api/v1/cards/{token}/status` | X-API-Key lub X-Admin-Key | Zablokuj / Odblokuj |
+| `PATCH` | `/api/v1/cards/{token}/status` | (X-API-Key + X-Signature + X-Timestamp) lub X-Admin-Key | Zablokuj / Odblokuj |
 | `PATCH` | `/api/v1/cards/{token}/lifecycle` | X-Admin-Key | Przesuń przez cykl produkcji |
-| `POST` | `/api/v1/cards/{token}/activate` | X-API-Key | Aktywuj kartę |
-| `POST` | `/api/v1/cards/{token}/topup` | — | Doładuj kartę prepaid |
+| `POST` | `/api/v1/cards/{token}/activate` | (X-API-Key + X-Signature + X-Timestamp) lub X-Admin-Key | Aktywuj kartę |
+| `POST` | `/api/v1/cards/{token}/topup` | (X-API-Key + X-Signature + X-Timestamp) lub X-Admin-Key | Doładuj kartę prepaid |
 
 #### Płatności
 
@@ -814,6 +814,11 @@ service CardProvider {
 
 > **Ta sekcja jest przeznaczona dla zespołów tworzących moduły bankowe.**  
 > URL: `http://localhost:8072`
+> 
+> **Każde** żądanie banku zmieniające stan karty (`issue`, `activate`, `status`, `topup`)
+> musi być podpisane: `X-API-Key` + `X-Signature` + `X-Timestamp`. Podpis liczony jest
+> identycznie dla wszystkich endpointów (patrz „Jak podpisać żądanie"). Brak ważnego
+> podpisu = **401**. Ten sam podpis użyty drugi raz w oknie 30 s jest odrzucany (replay).
 
 ### 1. Jak podpisać żądanie (HMAC)
 
@@ -880,20 +885,43 @@ curl -X POST http://localhost:8072/api/v1/cards/issue \
 
 ### 4. Jak aktywować kartę fizyczną/prepaid
 
+Body do podpisania: `{"activated_by": "customer_id"}`
+
 ```bash
 curl -X POST http://localhost:8072/api/v1/cards/{card_token}/activate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: bank-key-pl-a" \
+  -H "X-Signature: <podpis>" \
+  -H "X-Timestamp: <unix_timestamp>" \
   -d '{"activated_by": "customer_id"}'
 ```
 
 ### 5. Jak zablokować/odblokować kartę
 
+Body do podpisania: `{"status": "BLOCKED", "reason": "Lost card"}`
+
 ```bash
 curl -X PATCH http://localhost:8072/api/v1/cards/{card_token}/status \
   -H "Content-Type: application/json" \
   -H "X-API-Key: bank-key-pl-a" \
+  -H "X-Signature: <podpis>" \
+  -H "X-Timestamp: <unix_timestamp>" \
   -d '{"status": "BLOCKED", "reason": "Lost card"}'
+```
+
+> Operator Card Provider może zamiast tego użyć `X-Admin-Key` (bez podpisu).
+
+### 5a. Jak doładować kartę prepaid
+
+Body do podpisania: `{"amount": 100.0, "currency": "PLN"}`
+
+```bash
+curl -X POST http://localhost:8072/api/v1/cards/{card_token}/topup \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: bank-key-pl-a" \
+  -H "X-Signature: <podpis>" \
+  -H "X-Timestamp: <unix_timestamp>" \
+  -d '{"amount": 100.0, "currency": "PLN"}'
 ```
 
 ### 6. Co bank musi zaimplementować po swojej stronie
@@ -1108,28 +1136,28 @@ Dzięki temu integracja nie wymaga znajomości ISO 8583 ani implementacji komuni
 
 ### Etap 1 – Ocena 3.0
 
-| Zadanie | Kto | Status |
-|---|---|---|
-| Baza danych + modele SQLAlchemy | Filip | ✅ Zrobione |
-| Generowanie PAN (Luhn, BIN 6 cyfr) | Filip | ✅ Zrobione |
-| Generowanie CVV (HMAC-SHA256) | Filip | ✅ Zrobione |
-| Szyfrowanie PAN (AES-256 Fernet) | Filip | ✅ Zrobione |
-| Pan hash (HMAC deterministyczny, UNIQUE) | Filip | ✅ Zrobione |
-| gRPC CreateCard + typy kart | Filip | ✅ Zrobione |
-| Maszyna stanów karty | Filip | ✅ Zrobione |
-| Auto-aktywacja karty wirtualnej | Filip | ✅ Zrobione |
-| REST API dla kart | Filip | ✅ Zrobione |
-| BIN routing + API Keys banków | Filip | ✅ Zrobione |
-| HMAC-SHA256 auth + replay protection | Filip | ✅ Zrobione |
-| Doładowanie karty prepaid | Filip | ✅ Zrobione |
-| Panel admina (React) | Filip | ✅ Zrobione |
-| AuthorizeTransaction / ISO 8583 socket | Michał | ✅ Zrobione|
+| Zadanie                                               | Kto | Status |
+|-------------------------------------------------------|---|---|
+| Baza danych + modele SQLAlchemy                       | Filip | ✅ Zrobione |
+| Generowanie PAN (Luhn, BIN 6 cyfr)                    | Filip | ✅ Zrobione |
+| Generowanie CVV (HMAC-SHA256)                         | Filip | ✅ Zrobione |
+| Szyfrowanie PAN (AES-128 Fernet)                       | Filip | ✅ Zrobione |
+| Pan hash (HMAC deterministyczny, UNIQUE)              | Filip | ✅ Zrobione |
+| gRPC CreateCard + typy kart                           | Filip | ✅ Zrobione |
+| Maszyna stanów karty                                  | Filip | ✅ Zrobione |
+| Auto-aktywacja karty wirtualnej                       | Filip | ✅ Zrobione |
+| REST API dla kart                                     | Filip | ✅ Zrobione |
+| BIN routing + API Keys banków                         | Filip | ✅ Zrobione |
+| HMAC-SHA256 auth + replay protection                  | Filip | ✅ Zrobione |
+| Doładowanie karty prepaid                             | Filip | ✅ Zrobione |
+| Panel admina (React)                                  | Filip | ✅ Zrobione |
+| AuthorizeTransaction / ISO 8583 socket                | Michał | ✅ Zrobione|
 | REST API Terminal POS (Payment Gateway authorize API) | Michał | ✅ Zrobione |
-| Panel terminala (POS UI / emulator) | Michał | ✅ Zrobione |
-| MSC – Merchant Service Charge | Michał | ✅ Zrobione |
-| Authorization Hold (held_balance) | Michał | ✅ Zrobione |
-| Clearing & Settlement (nocny job) | Michał | ✅ Zrobione |
-| Panel terminala (POS UI) | Michał | ✅ Zrobione |
+| Panel terminala (POS UI / emulator)                   | Michał | ✅ Zrobione |
+| MSC – Merchant Service Charge                         | Michał | ✅ Zrobione |
+| Authorization Hold (held_balance)                     | Michał | ✅ Zrobione |
+| Clearing & Settlement (nocny job)                     | Michał | ✅ Zrobione |
+| Panel terminala (POS UI)                              | Michał | ✅ Zrobione |
 
 ### Etap 2 – Ocena 4.0
 
