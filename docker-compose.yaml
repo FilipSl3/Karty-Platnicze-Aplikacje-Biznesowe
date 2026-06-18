@@ -34,13 +34,13 @@ services:
       MINIO_SECRET_KEY: "minio_admin_2026"
       MINIO_BUCKET: "settlements"
       MINIO_RETENTION_DAYS: "1"
-      
+
       INTERCHANGE_FEE_PERCENT: 1.5
       SCHEME_FEE_PERCENT: 0.3
       ACQUIRER_FEE_PERCENT: 0.2
 
-      SETTLEMENT_INTERVAL_SECONDS: "30" #"86400" jakb bysmy chcieli po dniu a nie po 30 sekundach
-      
+      SETTLEMENT_INTERVAL_SECONDS: "120" #"86400" jakb bysmy chcieli po dniu a nie po 30 sekundach
+
       BANK_CAPTURE_URL_POLISH_BANK_A: "http://polish-bank-a:8000"
       BANK_CAPTURE_URL_POLISH_BANK_B: "http://polish-bank-b:8000"
 
@@ -59,8 +59,14 @@ services:
         condition: service_started
     networks:
       - cards-backend
-    # BRAK ports: gRPC (50051) i socket ISO (9000) widoczne TYLKO wewnątrz backendu.
-    # Gateway łączy się przez nazwę 'card-provider' w tej samej sieci - działa bez zmian.
+      - clearing-pl-a
+      - clearing-pl-b
+      - clearing-eu-a
+      - clearing-eu-b
+      - clearing-uk-a
+      - clearing-uk-b
+      - clearing-us-a
+      - clearing-us-b
 
   payment-gateway:
     build:
@@ -77,6 +83,14 @@ services:
     networks:
       - cards-frontend
       - cards-backend
+      - clearing-pl-a
+      - clearing-pl-b
+      - clearing-eu-a
+      - clearing-eu-b
+      - clearing-uk-a
+      - clearing-uk-b
+      - clearing-us-a
+      - clearing-us-b
 
   admin-panel:
     build:
@@ -128,14 +142,71 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/24
+        - subnet: 10.137.40.0/24
   cards-backend:
     name: cards-backend
     driver: bridge
     internal: true
     ipam:
       config:
-        - subnet: 172.21.0.0/24
+        - subnet: 10.137.41.0/24
+
+  clearing-pl-a:
+    name: clearing-pl-a-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.42.0/24
+  clearing-pl-b:
+    name: clearing-pl-b-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.43.0/24
+  clearing-eu-a:
+    name: clearing-eu-a-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.44.0/24
+  clearing-eu-b:
+    name: clearing-eu-b-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.45.0/24
+  clearing-uk-a:
+    name: clearing-uk-a-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.46.0/24
+  clearing-uk-b:
+    name: clearing-uk-b-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.47.0/24
+  clearing-us-a:
+    name: clearing-us-a-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.48.0/24
+  clearing-us-b:
+    name: clearing-us-b-karty
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.137.49.0/24
 
 volumes:
   postgres_data:
