@@ -47,7 +47,8 @@ Moduł **Karty Płatnicze** symuluje działanie systemu typu **Visa/Mastercard**
 - Archiwizacja transakcji w MinIO (WORM / Object Lock)
 - Emulacja terminala płatniczego (POS)
 - Panel administratora (React)
-- Segmentacja sieci Docker z bramą WireGuard VPN
+- Segmentacja sieci Docker z indywidualnymi sieciami clearing per bank
+- Brama WireGuard VPN do sieci wewnętrznej
 
 ---
 
@@ -59,16 +60,22 @@ graph TD
     TERMINAL[Terminal POS\nEmulator] -->|REST API| GW
     ADMIN[Admin Panel\n:3072] -->|REST API\nX-Admin-Key| GW
 
-    subgraph cards-frontend ["cards-frontend (bridge)"]
+    subgraph cards-frontend ["cards-frontend (bridge, 10.137.40.0/24)"]
         GW(Payment Gateway\nFastAPI :8072)
         PANEL[Admin Panel\n:3072]
-        VPN[WireGuard VPN\n:51820/udp]
+        VPN[WireGuard VPN\n:48820/udp]
     end
 
-    subgraph cards-backend ["cards-backend (internal – brak dostępu do internetu)"]
+    subgraph cards-backend ["cards-backend (internal, 10.137.41.0/24)"]
         CP[Card Provider\ngRPC :50051\nISO Socket :9000]
         DB[(PostgreSQL)]
         MINIO[(MinIO\nWORM)]
+    end
+
+    subgraph clearing ["Sieci clearing per bank (internal, izolowane)"]
+        CL_PLA["clearing-pl-a-karty\n10.137.42.0/24"]
+        CL_PLB["clearing-pl-b-karty\n10.137.43.0/24"]
+        CL_OTHER["clearing-eu/uk/us-a/b-karty\n10.137.44-49.0/24"]
     end
 
     GW -->|gRPC :50051| CP
@@ -77,16 +84,28 @@ graph TD
     CP -->|Archive| MINIO
     VPN -->|tunel do backendu| CP
     VPN -->|tunel do backendu| MINIO
+    GW <-->|issue/activate/status/topup| CL_PLA
+    GW <-->|issue/activate/status/topup| CL_PLB
+    CP <-->|capture| CL_PLA
+    CP <-->|capture| CL_PLB
 ```
 
 ### Segmentacja sieci
 
-| Sieć | Typ | Zawiera |
-|---|---|---|
-| `cards-frontend` | bridge (publiczna) | gateway, admin-panel, wireguard-vpn |
-| `cards-backend` | bridge (`internal: true`) | card-provider, postgres, minio, wireguard-vpn |
+| Sieć | Typ | Subnet | Zawiera |
+|---|---|---|---|
+| `cards-frontend` | bridge (publiczna) | `10.137.40.0/24` | gateway, admin-panel, wireguard-vpn |
+| `cards-backend` | bridge (`internal: true`) | `10.137.41.0/24` | card-provider, postgres, minio, wireguard-vpn |
+| `clearing-pl-a-karty` | bridge (`internal: true`) | `10.137.42.0/24` | gateway, card-provider ↔ **Polish Bank A** |
+| `clearing-pl-b-karty` | bridge (`internal: true`) | `10.137.43.0/24` | gateway, card-provider ↔ **Polish Bank B** |
+| `clearing-eu-a-karty` | bridge (`internal: true`) | `10.137.44.0/24` | gateway, card-provider ↔ **Euro Bank A** |
+| `clearing-eu-b-karty` | bridge (`internal: true`) | `10.137.45.0/24` | gateway, card-provider ↔ **Euro Bank B** |
+| `clearing-uk-a-karty` | bridge (`internal: true`) | `10.137.46.0/24` | gateway, card-provider ↔ **UK Bank A** |
+| `clearing-uk-b-karty` | bridge (`internal: true`) | `10.137.47.0/24` | gateway, card-provider ↔ **UK Bank B** |
+| `clearing-us-a-karty` | bridge (`internal: true`) | `10.137.48.0/24` | gateway, card-provider ↔ **US Bank A** |
+| `clearing-us-b-karty` | bridge (`internal: true`) | `10.137.49.0/24` | gateway, card-provider ↔ **US Bank B** |
 
-Gateway jest **mostem** między oboma sieciami. Admin-panel jest **tylko** na froncie i nie ma dostępu do bazy ani providera bezpośrednio.
+**Kluczowa właściwość izolacji:** Każdy bank jest w **swojej własnej sieci clearing**. Banki nie współdzielą żadnej sieci i nie widzą się nawzajem. Jedynym wspólnym elementem jest jednostka rozliczeniowa (gateway + card-provider), obecna we wszystkich sieciach clearing.
 
 ### Mikroserwisy
 
@@ -110,7 +129,7 @@ Gateway jest **mostem** między oboma sieciami. Admin-panel jest **tylko** na fr
 - Zarządzanie cyklem życia kart
 - Podgląd pełnych danych karty (tryb DEV)
 
-#### WireGuard VPN (port 51820/udp)
+#### WireGuard VPN (port 48820/udp → kontener 51820)
 - Brama VPN do sieci `cards-backend`
 - Dostęp do MinIO i Card Provider przez tunel
 - Config klienta: `wireguard-config/peer1/peer1.conf`
@@ -128,39 +147,69 @@ Internet / Host
      │                                  │  cards-backend (internal: true)
      ├─── :3072 ──→ [admin-panel]       ├─→ [card-provider :50051/:9000]
      │                                  ├─→ [postgres :5432]
-     └─── :51820/udp → [wireguard-vpn] ─┘  [minio :9000]
+     └─── :48820/udp → [wireguard-vpn] ─┘  [minio :9000]
                ↑
          jedyna droga do
          sieci wewnętrznej
          z zewnątrz
 ```
 
+### Izolacja banków – topologia hub-and-spoke
+
+```
+                  ┌──────────────────────────────────┐
+                  │     JEDNOSTKA ROZLICZENIOWA       │
+                  │   payment-gateway + card-provider │
+                  └────┬──────┬──────┬──────┬────────┘
+                       │      │      │      │
+             clearing  │      │      │      │  clearing
+             pl-a-karty│      │      │      │  pl-b-karty
+                  ┌────┘      │      │      └────┐
+                  │           │      │           │
+            ┌─────┴──┐  ... inne ...  ...   ┌───┴────┐
+            │BANK A  │                      │BANK B  │
+            └────────┘                      └────────┘
+           (nie widzi B)                  (nie widzi A)
+```
+
+Każdy bank widzi **tylko** jednostkę rozliczeniową przez swoją dedykowaną sieć. Banki **nie mają** wspólnej sieci i nie mogą się wzajemnie osiągnąć.
+
 ### Dowód izolacji
 
 ```bash
+# Bank A NIE widzi Banku B (musi ZAWIEŚĆ – to jest dowód izolacji)
+docker exec <kontener_banku_a> getent hosts polish-bank-b
+# → (brak odpowiedzi / NXDOMAIN)
+
+# Bank A WIDZI jednostkę rozliczeniową (musi zwrócić IP)
+docker exec <kontener_banku_a> getent hosts cards_gateway_app
+# → 10.137.42.x cards_gateway_app
+
+# Card Provider widzi OBA banki (musi zwrócić IP dla każdego)
+docker exec cards_provider_app python -c "import socket;print(socket.gethostbyname('polish-bank-a'))"
+# → 10.137.42.x
+docker exec cards_provider_app python -c "import socket;print(socket.gethostbyname('polish-bank-b'))"
+# → 10.137.43.x
+
 # Admin-panel NIE widzi bazy (różne sieci)
 docker exec cards_admin_panel ping -c 2 cards_postgres
 # → ping: bad address 'cards_postgres'
-
-# VPN WIDZI backend (jest w obu sieciach)
-docker exec cards_vpn ping -c 2 cards_minio
-# → 64 bytes from cards_minio ... 0% packet loss
 
 # Tylko gateway i panel mają publiczne porty
 docker ps --format "table {{.Names}}\t{{.Ports}}"
 # cards_admin_panel  0.0.0.0:3072->3000/tcp
 # cards_gateway_app  0.0.0.0:8072->8000/tcp
-# cards_provider_app (brak)
-# cards_postgres     5432/tcp (tylko wewnętrznie)
-# cards_minio        9000/tcp (tylko wewnętrznie)
-# cards_vpn          0.0.0.0:51820->51820/udp
+# cards_vpn          0.0.0.0:48820->51820/udp
+# cards_provider_app (brak portów)
+# cards_postgres     (brak portów)
+# cards_minio        (brak portów)
 ```
 
 ### Połączenie przez VPN
 
 1. Zaimportuj `wireguard-config/peer1/peer1.conf` do klienta WireGuard
 2. Aktywuj tunel
-3. Dostęp do sieci `172.21.0.0/24` (backend) przez tunel
+3. Dostęp do sieci `10.137.41.0/24` (backend) przez tunel
 
 ---
 
@@ -273,20 +322,13 @@ Proces wygląda następująco:
 
 2. **Settlement**
    - wykonywany przez scheduler batchowy
-    - transakcje `PENDING` są pobierane przez settlement batch.
-
-        1. `PENDING → CAPTURED`
-        2. wywołanie bankowego `/capture`
-        3. blokada środków (`held_balance`)
-   zamieniana jest na faktyczne
-   obciążenie salda
-        4. `CAPTURED → SETTLED`
-        5. obliczenie MSC
-        6. archiwizacja WORM (MinIO)
-   - środki są pobierane z salda
-   - blokada środków jest usuwana
-   - obliczany jest MSC
-   - transakcja archiwizowana jest w MinIO WORM
+   - transakcje `PENDING` są pobierane przez settlement batch:
+     1. `PENDING → CAPTURED`
+     2. wywołanie bankowego `/capture`
+     3. blokada środków (`held_balance`) zamieniana jest na faktyczne obciążenie salda
+     4. `CAPTURED → SETTLED`
+     5. obliczenie MSC
+     6. archiwizacja WORM (MinIO)
 
 Przykład:
 
@@ -310,6 +352,7 @@ SETTLEMENT_INTERVAL_SECONDS=86400
 ```
 
 Domyślnie odpowiada to **daily settlement (T+1 / EOD)**, jednak dla środowiska demonstracyjnego może zostać skrócony np. do `10–30 sekund`, aby umożliwić prezentację pełnego lifecycle transakcji podczas zajęć.
+
 ---
 
 ## Bezpieczeństwo i kryptografia
@@ -362,12 +405,12 @@ X-Signature: HMAC-SHA256(timestamp + body_json, hmac_secret)
 X-Timestamp: 1715123456
 ```
 
-Payment Gateway weryfikuje podpis nad **surowym body** requestu. Timestamp jest ważny maksymalnie **30 sekund** (ochrona przed replay attack).
+Payment Gateway weryfikuje podpis nad **surowym body** requestu. Timestamp jest ważny maksymalnie **30 sekund** (ochrona przed replay attack). Ten sam podpis użyty dwukrotnie w oknie 30 s jest odrzucany – **replay protection**.
 
 Chroni to przed:
 - Nieautoryzowanym dostępem (X-API-Key)
 - Fałszowaniem treści requestu (HMAC podpis)
-- Atakami replay (timestamp + okno 30s)
+- Atakami replay (timestamp + cache podpisów w oknie 30s)
 
 Bez znajomości sekretu HMAC bank **nie może** wydać ani zablokować karty – nawet znając klucz API.
 
@@ -375,8 +418,10 @@ Bez znajomości sekretu HMAC bank **nie może** wydać ani zablokować karty –
 
 | Klucz | Kto | Do czego |
 |---|---|---|
-| `X-API-Key` + `X-Signature` + `X-Timestamp` | Banki | Wydawanie kart, blokowanie, aktywacja |
-| `X-Admin-Key` | Operator Card Provider (my) | Lista kart, cykl produkcji, podgląd PAN (DEV) |
+| `X-API-Key` + `X-Signature` + `X-Timestamp` | Banki | Wydawanie kart, blokowanie, aktywacja, doładowanie |
+| `X-Admin-Key` | Operator Card Provider (my) | Lista kart, cykl produkcji, podgląd PAN (DEV), aktywacja, blokowanie, doładowanie |
+
+> **Uwaga:** Endpointy `activate`, `topup` i `status` akceptują **obie** formy uwierzytelnienia: bank może używać podpisu HMAC, a operator panelu może używać `X-Admin-Key`. Dzięki temu panel admina nie wymaga generowania podpisów HMAC.
 
 ---
 
@@ -394,7 +439,7 @@ stateDiagram-v2
 
     PRODUCING --> SHIPPED : Karta wysłana do banku\nPATCH /lifecycle {SHIPPED}\n(X-Admin-Key)
 
-    SHIPPED --> ACTIVE : Klient aktywuje kartę\nw aplikacji mobilnej banku\nPOST /activate\n(X-API-Key)
+    SHIPPED --> ACTIVE : Klient aktywuje kartę\nw aplikacji mobilnej banku\nPOST /activate\n(X-API-Key + X-Signature + X-Timestamp)
 
     SHIPPED --> BLOCKED : Awaryjne zastrzeżenie\nprzed aktywacją
 
@@ -418,10 +463,10 @@ stateDiagram-v2
 ```
 REQUESTED  → PRODUCING          (operator Card Provider, X-Admin-Key)
 PRODUCING  → SHIPPED            (operator Card Provider, X-Admin-Key)
-SHIPPED    → ACTIVE             (klient aktywuje w aplikacji banku, X-API-Key)
+SHIPPED    → ACTIVE             (klient aktywuje w aplikacji banku, X-API-Key + X-Signature)
 SHIPPED    → BLOCKED            (awaryjne zastrzeżenie)
-ACTIVE     → BLOCKED            (zastrzeżenie – bank lub admin)
-BLOCKED    → ACTIVE             (odblokowanie – bank lub admin)
+ACTIVE     → BLOCKED            (zastrzeżenie – bank z podpisem HMAC lub admin z X-Admin-Key)
+BLOCKED    → ACTIVE             (odblokowanie – bank z podpisem HMAC lub admin z X-Admin-Key)
 ```
 
 ---
@@ -439,7 +484,7 @@ sequenceDiagram
 
     B->>B: Generuje podpis\nHMAC-SHA256(timestamp+body, secret)
     B->>GW: POST /api/v1/cards/issue\nX-API-Key + X-Signature + X-Timestamp
-    GW->>GW: Weryfikacja X-API-Key\nWeryfikacja X-Signature (HMAC)\nSprawdzenie X-Timestamp (max 30s)
+    GW->>GW: Weryfikacja X-API-Key\nWeryfikacja X-Signature (HMAC)\nSprawdzenie X-Timestamp (max 30s)\nSprawdzenie replay (cache podpisów)
     GW->>CP: gRPC CreateCard()\n{api_key, user_id, card_type, ...}
     CP->>CP: Generowanie PAN (Luhn)\nGenerowanie CVV (HMAC)\nSzyfrowanie PAN (AES-128)\nGenerowanie pan_hash (HMAC)
     CP->>CP: Zapis do DB\n{pan_encrypted, pan_hash, masked_pan, expiry}
@@ -453,7 +498,8 @@ sequenceDiagram
 
     B->>K: Karta fizyczna\ndostarczona pocztą
     K->>B: Aktywuje w aplikacji\nmobilnej banku
-    B->>GW: POST /activate\n(X-API-Key)
+    B->>B: Generuje podpis HMAC\ndla body {"activated_by": "customer_id"}
+    B->>GW: POST /activate\n(X-API-Key + X-Signature + X-Timestamp)
     GW->>CP: gRPC ActivateCard()
     CP-->>GW: {status: ACTIVE}
     GW-->>B: Karta gotowa do płatności ✅
@@ -646,20 +692,21 @@ erDiagram
 
 ## Technologie
 
-| Warstwa | Technologia              | Uzasadnienie |
-|---|--------------------------|---|
-| Backend | Python 3.11              | Szybki development, bogate biblioteki |
-| Komunikacja kart | gRPC + Protocol Buffers  | Typowany kontrakt wewnętrzny |
-| Komunikacja terminali | ISO 8583 (TCP socket)    | Standard branżowy dla terminali POS |
-| REST API | FastAPI                  | Automatyczny Swagger, async, Pydantic |
-| Baza danych | PostgreSQL 16            | ACID – krytyczne przy transakcjach finansowych |
-| Szyfrowanie PAN | Fernet (AES-128)          | Standard szyfrowania symetrycznego |
-| Podpis requestów | HMAC-SHA256              | Weryfikacja autentyczności żądań banków |
-| CVV | HMAC-SHA256 + CVK        | Kryptograficzne generowanie bez przechowywania |
-| Frontend | React + Vite + Nginx     | Panel admina |
+| Warstwa | Technologia | Uzasadnienie |
+|---|---|---|
+| Backend | Python 3.11 | Szybki development, bogate biblioteki |
+| Komunikacja kart | gRPC + Protocol Buffers | Typowany kontrakt wewnętrzny |
+| Komunikacja terminali | ISO 8583 (TCP socket) | Standard branżowy dla terminali POS |
+| REST API | FastAPI | Automatyczny Swagger, async, Pydantic |
+| Baza danych | PostgreSQL 16 | ACID – krytyczne przy transakcjach finansowych |
+| Szyfrowanie PAN | Fernet (AES-128) | Standard szyfrowania symetrycznego |
+| Podpis requestów | HMAC-SHA256 | Weryfikacja autentyczności żądań banków |
+| CVV | HMAC-SHA256 + CVK | Kryptograficzne generowanie bez przechowywania |
+| Frontend | React + Vite + Nginx | Panel admina |
 | Archiwizacja | MinIO (Object Lock WORM) | S3-compatible, niemodyfikowalne archiwa |
-| Konteneryzacja | Docker Compose           | Izolacja, łatwe uruchomienie |
-| Sieć VPN | WireGuard                | Szyfrowany tunel do sieci wewnętrznej |
+| Konteneryzacja | Docker Compose | Izolacja, łatwe uruchomienie |
+| Sieć VPN | WireGuard | Szyfrowany tunel do sieci wewnętrznej |
+| Izolacja banków | Docker bridge networks (per bank) | Banki nie widzą się nawzajem |
 
 ---
 
@@ -672,7 +719,11 @@ erDiagram
 ### Start
 
 ```bash
+# Najpierw nasz stack (tworzy sieci clearing dla banków)
 docker compose up --build
+
+# Następnie stack bankowy (podpina się do już istniejących sieci)
+# – uruchamiany przez zespół bankowy w jego katalogu
 ```
 
 ### Serwisy po uruchomieniu
@@ -682,7 +733,8 @@ docker compose up --build
 | REST API + Swagger | http://localhost:8072/docs | Główny interfejs |
 | Payment Gateway | http://localhost:8072 | REST API |
 | Admin Panel | http://localhost:3072 | Panel admina (admin/admin123) |
-| WireGuard VPN | localhost:51820/udp | Brama VPN do sieci wewnętrznej |
+| POS Terminal | http://localhost:8072/pos | Emulator terminala płatniczego |
+| WireGuard VPN | localhost:48820/udp | Brama VPN do sieci wewnętrznej |
 | Card Provider | tylko sieć wewnętrzna | gRPC :50051, ISO socket :9000 |
 | PostgreSQL | tylko sieć wewnętrzna | :5432 |
 | MinIO | tylko sieć wewnętrzna | :9000 (dostęp przez VPN) |
@@ -691,16 +743,17 @@ docker compose up --build
 
 ### Zmienne środowiskowe
 
-| Zmienna | Domyślna | Opis                               |
-|---|---|------------------------------------|
-| `DATABASE_URL` | `postgresql+asyncpg://...` | Połączenie z PostgreSQL            |
-| `GRPC_SERVER_URL` | `card-provider:50051` | Adres Card Provider                |
+| Zmienna | Domyślna | Opis |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://...` | Połączenie z PostgreSQL |
+| `GRPC_SERVER_URL` | `card-provider:50051` | Adres Card Provider |
 | `VIRTUAL_CARD_ACTIVATION_DELAY` | `3600` | Auto-aktywacja Virtual w sekundach |
-| `PAN_ENCRYPTION_KEY` | `karty-platnicze-key-2026` | Klucz szyfrowania AES-128           |
-| `CARD_VERIFICATION_KEY` | `cvk-secret-key-2026` | Klucz generowania CVV i pan_hash   |
-| `ADMIN_API_KEY` | `admin-secret-key-2026` | Klucz X-Admin-Key                  |
-| `MINIO_ROOT_USER` | `minio_admin` | Login MinIO                        |
-| `MINIO_ROOT_PASSWORD` | `minio_admin_2026` | Hasło MinIO                        |
+| `PAN_ENCRYPTION_KEY` | `karty-platnicze-key-2026` | Klucz szyfrowania AES-128 |
+| `CARD_VERIFICATION_KEY` | `cvk-secret-key-2026` | Klucz generowania CVV i pan_hash |
+| `ADMIN_API_KEY` | `admin-secret-key-2026` | Klucz X-Admin-Key |
+| `MINIO_ROOT_USER` | `minio_admin` | Login MinIO |
+| `MINIO_ROOT_PASSWORD` | `minio_admin_2026` | Hasło MinIO |
+| `SETTLEMENT_INTERVAL_SECONDS` | `86400` | Interwał settlement (s) |
 
 > **DEV TIP:** `VIRTUAL_CARD_ACTIVATION_DELAY=60` w docker-compose.yaml – karta wirtualna aktywuje się po 60 sekundach zamiast 1 godziny.
 
@@ -710,16 +763,16 @@ docker compose up --build
 
 Każdy bank otrzymuje unikalny klucz API i sekret HMAC przy podpisaniu umowy z procesorem kart. Na podstawie klucza przypisywany jest **6-cyfrowy prefiks BIN**, który identyfikuje bank-wydawcę.
 
-| bank_id | Klucz API | Sekret HMAC | Prefiks BIN | Waluta |
-|---|---|---|---|---|
-| `POLISH_BANK_A` | `bank-key-pl-a` | `secret-pl-a-hmac` | `410001` | PLN |
-| `POLISH_BANK_B` | `bank-key-pl-b` | `secret-pl-b-hmac` | `420001` | PLN |
-| `EURO_BANK_A` | `bank-key-eu-a` | `secret-eu-a-hmac` | `430001` | EUR |
-| `EURO_BANK_B` | `bank-key-eu-b` | `secret-eu-b-hmac` | `440001` | EUR |
-| `UK_BANK_A` | `bank-key-uk-a` | `secret-uk-a-hmac` | `450001` | GBP |
-| `UK_BANK_B` | `bank-key-uk-b` | `secret-uk-b-hmac` | `460001` | GBP |
-| `US_BANK_A` | `bank-key-us-a` | `secret-us-a-hmac` | `470001` | USD |
-| `US_BANK_B` | `bank-key-us-b` | `secret-us-b-hmac` | `480001` | USD |
+| bank_id | Klucz API | Sekret HMAC | Prefiks BIN | Waluta | Sieć Docker |
+|---|---|---|---|---|---|
+| `POLISH_BANK_A` | `bank-key-pl-a` | `secret-pl-a-hmac` | `410001` | PLN | `clearing-pl-a-karty` |
+| `POLISH_BANK_B` | `bank-key-pl-b` | `secret-pl-b-hmac` | `420001` | PLN | `clearing-pl-b-karty` |
+| `EURO_BANK_A` | `bank-key-eu-a` | `secret-eu-a-hmac` | `430001` | EUR | `clearing-eu-a-karty` |
+| `EURO_BANK_B` | `bank-key-eu-b` | `secret-eu-b-hmac` | `440001` | EUR | `clearing-eu-b-karty` |
+| `UK_BANK_A` | `bank-key-uk-a` | `secret-uk-a-hmac` | `450001` | GBP | `clearing-uk-a-karty` |
+| `UK_BANK_B` | `bank-key-uk-b` | `secret-uk-b-hmac` | `460001` | GBP | `clearing-uk-b-karty` |
+| `US_BANK_A` | `bank-key-us-a` | `secret-us-a-hmac` | `470001` | USD | `clearing-us-a-karty` |
+| `US_BANK_B` | `bank-key-us-b` | `secret-us-b-hmac` | `480001` | USD | `clearing-us-b-karty` |
 
 ---
 
@@ -727,7 +780,6 @@ Każdy bank otrzymuje unikalny klucz API i sekret HMAC przy podpisaniu umowy z p
 
 > Pełna dokumentacja interaktywna: **http://localhost:8072/docs**
 
-### Endpointy REST (Payment Gateway :8072)
 ### Terminal POS (Web Emulator)
 
 Payment Gateway udostępnia prosty terminal płatniczy dostępny przez przeglądarkę:
@@ -735,28 +787,6 @@ Payment Gateway udostępnia prosty terminal płatniczy dostępny przez przegląd
 ```
 http://localhost:8072/pos
 ```
-
-Terminal pozwala zasymulować płatność kartą bez użycia Postmana lub Swaggera.
-
-Dostępne pola:
-
-* Numer karty (PAN)
-* Miesiąc ważności
-* Rok ważności
-* CVV
-* Kwota
-
-Po wysłaniu formularza wykonywane jest wywołanie:
-
-```
-POST /api/v1/payments/authorize
-```
-
-Wynik wyświetlany jest jako:
-
-* APPROVED – autoryzacja zakończona sukcesem
-* DECLINED – autoryzacja odrzucona
-* ERROR – błąd walidacji danych (np. niepoprawny numer karty)
 
 Przykładowe dane testowe:
 
@@ -766,6 +796,8 @@ Expiry: 05/29
 CVV:    889
 Amount: 50.00
 ```
+
+### Endpointy REST (Payment Gateway :8072)
 
 #### Karty
 
@@ -813,12 +845,12 @@ service CardProvider {
 ## Integracja z modułem kart (dla zespołów bankowych)
 
 > **Ta sekcja jest przeznaczona dla zespołów tworzących moduły bankowe.**  
-> URL: `http://localhost:8072`
-> 
+> URL: `http://cards_gateway_app:8000` (przez sieć Docker) lub `http://localhost:8072` (lokalnie)
+>
 > **Każde** żądanie banku zmieniające stan karty (`issue`, `activate`, `status`, `topup`)
 > musi być podpisane: `X-API-Key` + `X-Signature` + `X-Timestamp`. Podpis liczony jest
-> identycznie dla wszystkich endpointów (patrz „Jak podpisać żądanie"). Brak ważnego
-> podpisu = **401**. Ten sam podpis użyty drugi raz w oknie 30 s jest odrzucany (replay).
+> identycznie dla wszystkich endpointów. Brak ważnego podpisu = **401**.
+> Ten sam podpis użyty drugi raz w oknie 30 s jest odrzucany (replay protection).
 
 ### 1. Jak podpisać żądanie (HMAC)
 
@@ -843,7 +875,6 @@ def sign_request(body: dict) -> tuple[str, str]:
 ### 2. Jak zamówić kartę
 
 ```bash
-# Najpierw wygeneruj podpis (patrz wyżej), następnie:
 curl -X POST http://localhost:8072/api/v1/cards/issue \
   -H "Content-Type: application/json" \
   -H "X-API-Key: bank-key-pl-a" \
@@ -909,8 +940,6 @@ curl -X PATCH http://localhost:8072/api/v1/cards/{card_token}/status \
   -d '{"status": "BLOCKED", "reason": "Lost card"}'
 ```
 
-> Operator Card Provider może zamiast tego użyć `X-Admin-Key` (bez podpisu).
-
 ### 5a. Jak doładować kartę prepaid
 
 Body do podpisania: `{"amount": 100.0, "currency": "PLN"}`
@@ -924,7 +953,61 @@ curl -X POST http://localhost:8072/api/v1/cards/{card_token}/topup \
   -d '{"amount": 100.0, "currency": "PLN"}'
 ```
 
-### 6. Co bank musi zaimplementować po swojej stronie
+### 6. Docker Networking – jak podłączyć bank do sieci clearing
+
+> ⚠️ **Zmiana względem poprzedniej wersji:** Banki **nie** podłączają się do sieci `cards-backend`.
+> Każdy bank ma własną, dedykowaną sieć clearing. Tylko ta sieć jest dostępna dla banku.
+
+Każdy bank podłącza się do **swojej** sieci clearing poprzez `docker-compose.override.yml`
+w katalogu projektu bankowego. Poniżej znajdziesz swoją nazwę sieci i alias kontenera.
+
+| Bank | Nazwa sieci (external) | Alias kontenera |
+|---|---|---|
+| Polish Bank A | `clearing-pl-a-karty` | `polish-bank-a` |
+| Polish Bank B | `clearing-pl-b-karty` | `polish-bank-b` |
+| Euro Bank A | `clearing-eu-a-karty` | `euro-bank-a` |
+| Euro Bank B | `clearing-eu-b-karty` | `euro-bank-b` |
+| UK Bank A | `clearing-uk-a-karty` | `uk-bank-a` |
+| UK Bank B | `clearing-uk-b-karty` | `uk-bank-b` |
+| US Bank A | `clearing-us-a-karty` | `us-bank-a` |
+| US Bank B | `clearing-us-b-karty` | `us-bank-b` |
+
+**Przykład `docker-compose.override.yml` dla Polish Bank B:**
+
+```yaml
+services:
+  backend:                        # nazwa serwisu API w projekcie bankowym
+    networks:
+      default: {}
+      clearing-pl-b-karty:
+        aliases:
+          - polish-bank-b         # pod tą nazwą widzi bank card-provider
+
+networks:
+  clearing-pl-b-karty:
+    external: true                # sieć już istnieje – tworzy ją nasz stack
+```
+
+**Kolejność uruchamiania (ważna!):**
+
+```bash
+# 1. Najpierw nasz stack (tworzy sieci clearing)
+docker compose up -d     # w katalogu Karty-Platnicze
+
+# 2. Potem stack bankowy (podpina się do gotowej sieci)
+docker compose up -d     # w katalogu projektu bankowego
+```
+
+Card Provider wołał będzie bank pod adresem:
+
+```
+http://polish-bank-b:8000/capture
+```
+
+Port hosta (`8081`, `5100` itp.) jest używany wyłącznie przez przeglądarkę –
+Card Provider nie korzysta z portów hosta.
+
+### 7. Co bank musi zaimplementować po swojej stronie
 
 #### `POST /api/v1/authorize`
 
@@ -967,43 +1050,8 @@ Możliwe `decline_reason`: `INSUFFICIENT_FUNDS`, `ACCOUNT_BLOCKED`, `LIMIT_EXCEE
 // Response:
 { "status": "REFUNDED" }
 ```
-## Docker Networking – Integracja Banków
 
-Card Provider komunikuje się z bankami
-przez Docker internal network.
-
-Bank musi być osiągalny pod nazwą
-kontenera/service name:
-
-```text
-http://polish-bank-a:8000/capture
-```
-
-Uwaga:
-
-Port hosta (`8081`, `8082`, itd.)
-nie jest używany przez Card Provider.
-
-Przykład:
-
-```yaml
-polish-bank-a:
-  ports:
-    - "8081:8000"
-```
-
-Card Provider wywoła:
-
-```text
-http://polish-bank-a:8000/capture
-```
-
-nie:
-
-```text
-http://localhost:8081/capture
-```
-### 7. Kody odpowiedzi autoryzacji
+### 8. Kody odpowiedzi autoryzacji
 
 | Kod | Znaczenie |
 |---|---|
@@ -1017,147 +1065,55 @@ http://localhost:8081/capture
 | `CARD_EXPIRED` | Karta wygasła |
 | `BANK_TIMEOUT` | Bank nie odpowiedział w czasie |
 
----
-### 8. Testy integracyjne dla banków
+### 9. Testy integracyjne dla banków
 
 Po podłączeniu banku do systemu kart należy wykonać następujące testy.
 
-#### Test 1 – Wydanie karty
+**Test 1 – Wydanie karty:** `POST /api/v1/cards/issue` → status 200, zwrócony token, pełny PAN, CVV.
 
-Wywołaj:
+**Test 2 – Aktywacja karty:** `POST /api/v1/cards/{token}/activate` z podpisem HMAC → `status = ACTIVE`.
 
-```
-POST /api/v1/cards/issue
-```
+**Test 3 – Autoryzacja poprawnej płatności:** W terminalu `http://localhost:8072/pos` z poprawnymi danymi karty → `APPROVED`.
 
-Oczekiwany rezultat:
+**Test 4 – Niepoprawny numer karty:** Modyfikacja ostatniej cyfry PAN → `ERROR: Invalid card number (Luhn failed)`.
 
-* status 200
-* zwrócony token karty
-* zwrócony pełny PAN
-* zwrócony CVV
+**Test 5 – Niepoprawny CVV:** Błędny kod CVV → `DECLINED`.
 
-#### Test 2 – Aktywacja karty
+**Test 6 – Zablokowana karta:** `PATCH /status {BLOCKED}` z podpisem HMAC, następnie płatność → `DECLINED`.
 
-Dla kart PHYSICAL lub PREPAID:
-
-```
-POST /api/v1/cards/{token}/activate
-```
-
-Oczekiwany rezultat:
-
-```
-status = ACTIVE
-```
-
-#### Test 3 – Autoryzacja poprawnej płatności
-
-W terminalu POS:
-
-```
-http://localhost:8072/pos
-```
-
-Wprowadź poprawne dane karty.
-
-Oczekiwany rezultat:
-
-```
-APPROVED
-```
-
-#### Test 4 – Niepoprawny numer karty
-
-Zmodyfikuj ostatnią cyfrę PAN.
-
-Oczekiwany rezultat:
-
-```
-ERROR
-Invalid card number (Luhn failed)
-```
-
-#### Test 5 – Niepoprawny CVV
-
-Wprowadź błędny kod CVV.
-
-Oczekiwany rezultat:
-
-```
-DECLINED
-```
-
-#### Test 6 – Zablokowana karta
-
-Zmień status karty:
-
-```
-PATCH /api/v1/cards/{token}/status
-{
-  "status": "BLOCKED"
-}
-```
-
-Następnie wykonaj płatność.
-
-Oczekiwany rezultat:
-
-```
-DECLINED
-```
-
-#### Test 7 – Settlement
-
-Po wykonaniu autoryzacji sprawdź tabelę transactions.
-
-Po uruchomieniu settlementu:
-
-* status transakcji zmienia się na SETTLED
-* obliczane jest MSC
-* tworzony jest wpis w transaction_fees
-
-Integrację można uznać za poprawną, jeśli wszystkie powyższe testy zakończą się oczekiwanym wynikiem.
+**Test 7 – Settlement:** Po autoryzacji odczekaj interwał settlement. Status transakcji → `SETTLED`, pojawia się wpis w `transaction_fees`.
 
 ### Czy bank musi implementować ISO 8583?
 
-Nie.
+Nie. ISO 8583 jest używane wyłącznie wewnątrz modułu kart między Payment Gateway a Card Provider. Bank komunikuje się z modułem kart wyłącznie przez **REST API** z podpisami **HMAC-SHA256**.
 
-ISO 8583 jest używane wyłącznie wewnątrz modułu kart płatniczych pomiędzy:
-
-- Payment Gateway
-- Card Provider
-
-Bank komunikuje się z modułem kart wyłącznie przez REST API oraz podpisy HMAC-SHA256.
-
-Dzięki temu integracja nie wymaga znajomości ISO 8583 ani implementacji komunikacji socketowej.
+---
 
 ## Plan rozwoju
 
 ### Etap 1 – Ocena 3.0
 
-| Zadanie                                               | Kto | Status |
-|-------------------------------------------------------|---|---|
-| Baza danych + modele SQLAlchemy                       | Filip | ✅ Zrobione |
-| Generowanie PAN (Luhn, BIN 6 cyfr)                    | Filip | ✅ Zrobione |
-| Generowanie CVV (HMAC-SHA256)                         | Filip | ✅ Zrobione |
-| Szyfrowanie PAN (AES-128 Fernet)                       | Filip | ✅ Zrobione |
-| Pan hash (HMAC deterministyczny, UNIQUE)              | Filip | ✅ Zrobione |
-| gRPC CreateCard + typy kart                           | Filip | ✅ Zrobione |
-| Maszyna stanów karty                                  | Filip | ✅ Zrobione |
-| Auto-aktywacja karty wirtualnej                       | Filip | ✅ Zrobione |
-| REST API dla kart                                     | Filip | ✅ Zrobione |
-| BIN routing + API Keys banków                         | Filip | ✅ Zrobione |
-| HMAC-SHA256 auth + replay protection                  | Filip | ✅ Zrobione |
-| Doładowanie karty prepaid                             | Filip | ✅ Zrobione |
-| Panel admina (React)                                  | Filip | ✅ Zrobione |
-| AuthorizeTransaction / ISO 8583 socket                | Michał | ✅ Zrobione|
+| Zadanie | Kto | Status |
+|---|---|---|
+| Baza danych + modele SQLAlchemy | Filip | ✅ Zrobione |
+| Generowanie PAN (Luhn, BIN 6 cyfr) | Filip | ✅ Zrobione |
+| Generowanie CVV (HMAC-SHA256) | Filip | ✅ Zrobione |
+| Szyfrowanie PAN (AES-128 Fernet) | Filip | ✅ Zrobione |
+| Pan hash (HMAC deterministyczny, UNIQUE) | Filip | ✅ Zrobione |
+| gRPC CreateCard + typy kart | Filip | ✅ Zrobione |
+| Maszyna stanów karty | Filip | ✅ Zrobione |
+| Auto-aktywacja karty wirtualnej | Filip | ✅ Zrobione |
+| REST API dla kart | Filip | ✅ Zrobione |
+| BIN routing + API Keys banków | Filip | ✅ Zrobione |
+| HMAC-SHA256 auth + replay protection | Filip | ✅ Zrobione |
+| Doładowanie karty prepaid | Filip | ✅ Zrobione |
+| Panel admina (React) | Filip | ✅ Zrobione |
+| AuthorizeTransaction / ISO 8583 socket | Michał | ✅ Zrobione |
 | REST API Terminal POS (Payment Gateway authorize API) | Michał | ✅ Zrobione |
-| Panel terminala (POS UI / emulator)                   | Michał | ✅ Zrobione |
-| MSC – Merchant Service Charge                         | Michał | ✅ Zrobione |
-| Authorization Hold (held_balance)                     | Michał | ✅ Zrobione |
-| Clearing & Settlement (nocny job)                     | Michał | ✅ Zrobione |
-| Panel terminala (POS UI)                              | Michał | ✅ Zrobione |
+| Panel terminala (POS UI / emulator) | Michał | ✅ Zrobione |
+| MSC – Merchant Service Charge | Michał | ✅ Zrobione |
+| Authorization Hold (held_balance) | Michał | ✅ Zrobione |
+| Clearing & Settlement (nocny job) | Michał | ✅ Zrobione |
 
 ### Etap 2 – Ocena 4.0
 
@@ -1171,5 +1127,5 @@ Dzięki temu integracja nie wymaga znajomości ISO 8583 ani implementacji komuni
 | Zadanie | Kto | Status |
 |---|---|---|
 | Mechanizm Chargeback | Michał | ⏳ Planowane |
-| Segmentacja sieci Docker (frontend/backend) | Filip | ✅ Zrobione |
+| Segmentacja sieci Docker (per bank, izolacja) | Filip | ✅ Zrobione |
 | Brama WireGuard VPN do sieci wewnętrznej | Filip | ✅ Zrobione |
