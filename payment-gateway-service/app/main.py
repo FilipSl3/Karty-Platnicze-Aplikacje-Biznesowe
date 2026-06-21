@@ -866,3 +866,13 @@ async def get_revenue():
             "total_revenue": float(total_revenue or 0),
             "average_revenue_per_transaction": avg_revenue
         }
+# docker exec -it cards_postgres psql -U bank_user -d cards_db
+# SELECT * FROM transaction_fees;
+#SELECT
+#    COUNT(*) AS transactions_count,
+#    SUM(interchange_fee) AS interchange_total,
+#    SUM(scheme_fee) AS scheme_total,
+#    SUM(acquirer_fee) AS acquirer_total,
+#    SUM(total_fee) AS total_revenue
+#FROM transaction_fees;
+#
