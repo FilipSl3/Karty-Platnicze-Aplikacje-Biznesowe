@@ -57,6 +57,12 @@ def save_offline_transaction(tx: dict):
     with open(OFFLINE_FILE, "w") as f:
         json.dump(transactions, f, indent=2)
 
+def clear_offline_transactions(transactions: list):
+    os.makedirs("/app/data", exist_ok=True)
+
+    with open(OFFLINE_FILE, "w") as f:
+        json.dump(transactions, f, indent=2)
+
 def _is_fresh_signature(signature: str) -> bool:
     """True = podpis nowy (OK). False = już użyty w oknie ważności (replay)."""
     now = time.time()
@@ -601,13 +607,23 @@ async def get_full_pan(
 @app.post("/api/v1/payments/authorize", tags=["Płatności"],
           summary="Autoryzacja płatności kartą (POS Terminal)",
           description="""
-Symulacja terminala płatniczego POS.
+Endpoint symuluje działanie terminala płatniczego POS.
 
-Przebieg:
-1. Walidacja numeru karty algorytmem Luhna
-2. Budowa komunikatu ISO 8583
-3. Wysłanie przez TCP socket do Card Provider
-4. Zwrot decyzji APPROVED / DECLINED
+Mechanizm:
+- waliduje numer karty algorytmem Luhna
+- buduje wiadomość ISO8583
+- wysyła żądanie autoryzacyjne do Card Provider
+- odbiera odpowiedź autoryzacyjną
+- zwraca wynik (APPROVED / DECLINED)
+
+Dodatkowo:
+- jeśli serwer autoryzacji jest niedostępny
+- a kwota mieści się w floor limit (np. <= 50 PLN)
+- transakcja zostaje zaakceptowana offline i zapisana lokalnie
+
+Obsługuje:
+- autoryzację online
+- autoryzację offline (floor limit)
 
 Ten endpoint służy do testowania terminala POS. Banki nie wywołują go bezpośrednio.
 """)
@@ -712,3 +728,87 @@ async def pos_terminal(request: Request):
         request=request,
         name="pos.html"
     )
+# --- batch offline ---
+@app.post(
+    "/api/v1/payments/replay-offline",
+    tags=["Płatności offline"],
+    summary="Przetworzenie zapisanych transakcji offline",
+    description="""
+Endpoint techniczny służący do ponownego przesłania transakcji
+zaakceptowanych lokalnie w trybie offline.
+
+Nie jest to standardowy endpoint płatniczy.
+
+Używany wyłącznie po odzyskaniu połączenia z systemem autoryzacji.
+
+Mechanizm:
+- odczytuje lokalną kolejkę transakcji offline
+- ponawia autoryzację każdej transakcji
+- usuwa poprawnie przetworzone rekordy
+- pozostawia nieudane do kolejnej próby
+
+Symuluje mechanizm batch upload / store-and-forward.
+"""
+)
+async def replay_offline_transactions():
+    transactions = load_offline_transactions()
+
+    if not transactions:
+        return {
+            "success": True,
+            "message": "No offline transactions"
+        }
+
+    remaining_transactions = []
+
+    for tx in transactions:
+        try:
+            iso_message = {
+                "t": "0100",
+                "2": tx["card_number"],
+                "4": str(int(tx["amount"] * 100)).zfill(12),
+                "14": "0529",
+                "41": "POS00001".ljust(8),
+                "42": tx["merchant_id"][:15].ljust(15),
+                "49": tx["currency"],
+                "52": "889"
+            }
+
+            raw_iso, _ = encode(
+                iso_message,
+                spec
+            )
+
+            decoded = await send_iso(raw_iso)
+
+            if decoded["39"] == "00":
+                print(
+                    "OFFLINE REPLAY SUCCESS:",
+                    tx["card_number"]
+                )
+            else:
+                print(
+                    "OFFLINE REPLAY DECLINED:",
+                    tx["card_number"]
+                )
+                remaining_transactions.append(tx)
+
+        except Exception as e:
+            print(
+                "OFFLINE REPLAY FAILED:",
+                str(e)
+            )
+            remaining_transactions.append(tx)
+
+    clear_offline_transactions(
+        remaining_transactions
+    )
+
+    return {
+        "success": True,
+        "processed":
+            len(transactions)
+            - len(remaining_transactions),
+        "remaining":
+            len(remaining_transactions)
+    }

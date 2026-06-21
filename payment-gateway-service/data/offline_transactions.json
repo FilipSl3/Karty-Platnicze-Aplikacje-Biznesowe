@@ -1,18 +1,1 @@
-[
-  {
-    "card_number": "4100013395241296",
-    "amount": 43.0,
-    "currency": "PLN",
-    "merchant_id": "SHOP_001",
-    "merchant_name": "Test Shop",
-    "created_at": "1782036883.121"
-  },
-  {
-    "card_number": "4100013395241296",
-    "amount": 33.0,
-    "currency": "PLN",
-    "merchant_id": "SHOP_001",
-    "merchant_name": "Test Shop",
-    "created_at": "1782037258.1254313"
-  }
-]
+[]
