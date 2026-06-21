@@ -7,3 +7,5 @@ pydantic
 python-dotenv
 pyiso8583
 jinja2
+sqlalchemy==2.0.36
+asyncpg

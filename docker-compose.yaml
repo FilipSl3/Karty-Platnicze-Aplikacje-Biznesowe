@@ -80,6 +80,7 @@ services:
     environment:
       GRPC_SERVER_URL: "card-provider:50051"
       ADMIN_API_KEY: "admin-secret-key-2026"
+      DATABASE_URL: "postgresql+asyncpg://bank_user:bank_pass@postgres-db/cards_db"
     depends_on:
       - card-provider
     networks:

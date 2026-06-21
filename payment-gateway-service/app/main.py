@@ -16,7 +16,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 import threading
 from collections import OrderedDict
-
+from sqlalchemy import select, func
+from app.database import AsyncSessionLocal
+from app.revenue_models import TransactionFee
 GRPC_URL = os.getenv("GRPC_SERVER_URL", "card-provider:50051")
 from app.grpc_client import (
     authorize_transaction
@@ -812,3 +814,55 @@ async def replay_offline_transactions():
         "remaining":
             len(remaining_transactions)
     }
+@app.get(
+    "/api/v1/admin/revenue",
+    tags=["Admin / Przychody"],
+    summary="Podsumowanie przychodów z MSC",
+    description="""
+Endpoint administracyjny pokazujący przychód operatora kart
+z opłat MSC (Merchant Service Charge).
+
+Zawiera:
+- łączny przychód
+- interchange fee
+- scheme fee
+- acquirer fee
+- liczbę transakcji
+- średni przychód na transakcję
+"""
+)
+async def get_revenue():
+    async with AsyncSessionLocal() as db:
+
+        result = await db.execute(
+            select(
+                func.count(TransactionFee.id),
+                func.sum(TransactionFee.interchange_fee),
+                func.sum(TransactionFee.scheme_fee),
+                func.sum(TransactionFee.acquirer_fee),
+                func.sum(TransactionFee.total_fee)
+            )
+        )
+
+        (
+            total_transactions,
+            interchange_sum,
+            scheme_sum,
+            acquirer_sum,
+            total_revenue
+        ) = result.one()
+
+        avg_revenue = (
+            float(total_revenue) / total_transactions
+            if total_transactions and total_revenue
+            else 0
+        )
+
+        return {
+            "transactions_count": total_transactions,
+            "interchange_fee_total": float(interchange_sum or 0),
+            "scheme_fee_total": float(scheme_sum or 0),
+            "acquirer_fee_total": float(acquirer_sum or 0),
+            "total_revenue": float(total_revenue or 0),
+            "average_revenue_per_transaction": avg_revenue
+        }
