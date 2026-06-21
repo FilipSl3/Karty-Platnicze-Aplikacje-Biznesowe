@@ -35,11 +35,27 @@ BANK_HMAC_SECRETS = {
 
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "admin-secret-key-2026")
 SIGNATURE_MAX_AGE_SECONDS = 30
-
+OFFLINE_FILE = "/app/data/offline_transactions.json"
 # Cache zużytych podpisów -> realna ochrona przed replay w obrębie okna ważności.
 _seen_signatures: "OrderedDict[str, float]" = OrderedDict()
 _seen_lock = threading.Lock()
+OFFLINE_FLOOR_LIMIT = 50.00
+def load_offline_transactions():
+    try:
+        with open(OFFLINE_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return []
 
+
+def save_offline_transaction(tx: dict):
+    os.makedirs("/app/data", exist_ok=True)
+
+    transactions = load_offline_transactions()
+    transactions.append(tx)
+
+    with open(OFFLINE_FILE, "w") as f:
+        json.dump(transactions, f, indent=2)
 
 def _is_fresh_signature(signature: str) -> bool:
     """True = podpis nowy (OK). False = już użyty w oknie ważności (replay)."""
@@ -284,7 +300,12 @@ async def list_cards(_: str = Depends(verify_admin_key)):
                 } for c in response.cards
             ]}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print("AUTHORIZE ERROR:", repr(e))
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 
 @app.post("/api/v1/cards/issue", tags=["Karty"], summary="Wydaj nową kartę")
@@ -336,7 +357,12 @@ async def issue_card(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print("AUTHORIZE ERROR:", repr(e))
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 
 @app.get("/api/v1/cards/{card_token}", tags=["Karty"], summary="Pobierz status karty")
@@ -592,10 +618,13 @@ async def authorize_payment(body: AuthorizeRequest):
     card_number = body.card_number.replace(" ", "")
 
     if not validate_luhn(card_number):
-        raise HTTPException(status_code=400, detail="Invalid card number (Luhn failed)")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid card number (Luhn failed)"
+        )
 
     try:
-        # przytnij rok do YY – jeśli ktoś poda 2026 zamiast 26, pole DE14 (max 4) nie pęknie
+
         expiry_year = body.expiry_year % 100
 
         iso_message = {
@@ -609,27 +638,70 @@ async def authorize_payment(body: AuthorizeRequest):
             "52": body.cvv,
         }
 
-        raw_iso, encoded = encode(iso_message, spec)
+        raw_iso, encoded = encode(
+            iso_message,
+            spec
+        )
 
         print("========== GATEWAY ISO ==========")
         print(iso_message)
         print(encoded)
         print(raw_iso)
 
-        decoded = await send_iso(raw_iso)
+        try:
+            decoded = await send_iso(raw_iso)
 
-        return {
-            "approved": decoded["39"] == "00",
-            "response_code": decoded["39"],
-            "authorization_code": decoded.get("38", ""),
-            "message": "Approved" if decoded["39"] == "00" else "Declined"
-        }
-    except grpc.RpcError as e:
-        raise HTTPException(status_code=500, detail=f"gRPC error: {e.details()}")
+            return {
+                "approved": decoded["39"] == "00",
+                "offline": False,
+                "response_code": decoded["39"],
+                "authorization_code": decoded.get("38", ""),
+                "message":
+                    "Approved"
+                    if decoded["39"] == "00"
+                    else "Declined"
+            }
+        except Exception:
+            
+
+            if body.amount <= OFFLINE_FLOOR_LIMIT:
+
+                offline_tx = {
+                    "card_number": card_number,
+                    "amount": body.amount,
+                    "currency": body.currency,
+                    "merchant_id": body.merchant_id,
+                    "merchant_name": body.merchant_name,
+                    "created_at": str(time.time())
+                }
+
+                save_offline_transaction(
+                    offline_tx
+                )
+
+                print("OFFLINE STORED LOCALLY")
+
+                return {
+                    "approved": True,
+                    "offline": True,
+                    "response_code": "OFFLINE",
+                    "authorization_code": "OFF999",
+                    "message": "Approved offline (floor limit)"
+                }
+
+
+
+            raise HTTPException(
+                status_code=503,
+                detail="Authorization server unavailable"
+            )
+
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 # --- POS terminal (GUI) ---
 
 @app.get("/pos", response_class=HTMLResponse, tags=["POS"],

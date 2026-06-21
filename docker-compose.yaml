@@ -69,6 +69,8 @@ services:
     container_name: cards_gateway_app
     ports:
       - "8072:8000"
+    volumes:
+      - ./payment-gateway-service/data:/app/data    
     environment:
       GRPC_SERVER_URL: "card-provider:50051"
       ADMIN_API_KEY: "admin-secret-key-2026"

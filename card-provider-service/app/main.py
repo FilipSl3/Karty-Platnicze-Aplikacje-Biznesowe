@@ -432,6 +432,12 @@ async def call_bank_capture(
 
             return False
 
+    except httpx.ConnectError:
+        logger.warning(
+            f"CAPTURE FAIL: bank unreachable tx={tx.id}"
+        )
+        return False
+
     except Exception as e:
         logger.exception(
             f"Capture error: {e}"
@@ -725,7 +731,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
             ))
             await db.commit()
             return card_pb2.UnblockCardResponse(success=True, message=f"Unblocked → {restore.value}")
-
+    
     async def AuthorizeTransaction(self, request, context):
         """
         Autoryzacja płatności kartą POS.
@@ -843,18 +849,21 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 # status
                 elif card.status != CardStatus.ACTIVE:
                     response_code = "05"
-                elif available_balance < amount:
+                elif (
+                    card.card_type == CardType.PREPAID
+                    and available_balance < amount
+                ):
                     response_code = "51"  # insufficient funds
                 # approved
                 else:
                     response_code = "00"
                     
                     authorization_code = secrets.token_hex(3).upper()
-
-                    card.held_balance = (
-                       Decimal(str(card.held_balance))
-                        + amount
-                    )
+                    if card.card_type == CardType.PREPAID:
+                        card.held_balance = (
+                        Decimal(str(card.held_balance))
+                            + amount
+                        )
 
                     transaction = Transaction(
                         card_id=card.id,
@@ -884,6 +893,7 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
         return card_pb2.IsoResponse(
             payload=bytes(raw_response)
         )
+
     async def GetFullPan(self, request, context):
         """Zwraca odszyfrowany PAN – tylko dla admina w celach testowych."""
         async with AsyncSessionLocal() as db:
@@ -905,16 +915,56 @@ class CardProviderServicer(card_pb2_grpc.CardProviderServicer):
                 expiry_month=card.expiry_month,
                 expiry_year=card.expiry_year,
             )
+    async def StoreOfflineTransaction(self, request, context):
+        async with AsyncSessionLocal() as db:
+
+            result = await db.execute(select(Card))
+            cards = result.scalars().all()
+
+            card = None
+
+            for c in cards:
+                full_pan = decrypt_pan(c.pan_encrypted)
+
+                if full_pan == request.card_number:
+                    card = c
+                    break
+
+            if not card:
+                return card_pb2.OfflineTransactionResponse(
+                    success=False,
+                    message="Card not found"
+                )
+
+            transaction = Transaction(
+                card_id=card.id,
+                merchant_id=request.merchant_id,
+                merchant_name=request.merchant_name,
+                amount=Decimal(str(request.amount)),
+                currency=request.currency,
+                status=TransactionStatus.OFFLINE_PENDING,
+                authorization_code="OFFLINE"
+            )
+
+            db.add(transaction)
+            await db.commit()
+
+            return card_pb2.OfflineTransactionResponse(
+                success=True,
+                message="Stored offline"
+            )
 #settlement
 async def process_settlements():
 
     async with AsyncSessionLocal() as db:
 
         result = await db.execute(
-            select(Transaction).where(
-                Transaction.status
-                == TransactionStatus.PENDING
-            )
+        select(Transaction).where(
+        Transaction.status.in_([
+            TransactionStatus.PENDING,
+            TransactionStatus.OFFLINE_PENDING
+    ])
+)
         )
 
         transactions = result.scalars().all()
@@ -946,6 +996,10 @@ async def process_settlements():
             if not card:
                 continue
 
+            if tx.status == TransactionStatus.OFFLINE_PENDING:
+                logger.info(
+                f"Replaying offline tx={tx.id}"
+                )
             # CAPTURED
             tx.status = (
                 TransactionStatus
@@ -968,11 +1022,10 @@ async def process_settlements():
                     f"tx={tx.id}"
                 )
 
-                # wracamy do PENDING
-                tx.status = (
-                    TransactionStatus
-                    .PENDING
-                )
+                if tx.authorization_code == "OFFLINE":
+                    tx.status = TransactionStatus.OFFLINE_PENDING
+                else:
+                    tx.status = TransactionStatus.PENDING
 
                 continue
 
@@ -1003,17 +1056,18 @@ async def process_settlements():
             )
 
             # finalne obciążenie
-            card.balance = (
-                Decimal(str(card.balance))
-                - amount
-            )
-
-            card.held_balance = (
-                Decimal(
-                    str(card.held_balance)
+            if card.card_type == CardType.PREPAID:
+                card.balance = (
+                    Decimal(str(card.balance))
+                    - amount
                 )
-                - amount
-            )
+
+                card.held_balance = (
+                    Decimal(
+                        str(card.held_balance)
+                    )
+                    - amount
+                )
 
             # SETTLED
             tx.status = (
@@ -1119,23 +1173,24 @@ async def settlement_worker():
                 f"Settlement error: {e}"
             )
 
-async def serve():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await seed_bank_api_keys()
-    await seed_test_cards()
-    await asyncio.to_thread(init_minio_bucket)
-    server = aio.server()
-    card_pb2_grpc.add_CardProviderServicer_to_server(CardProviderServicer(), server)
-    server.add_insecure_port('[::]:50051')
-    logger.info("Card Provider Service RUNNING on port 50051 (gRPC)")
-    await server.start()
-    await server.wait_for_termination()
+
+    
 
 
 from app.iso_socket_server import start_socket_server
 
-
+async def serve():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await seed_bank_api_keys()
+        await seed_test_cards()
+        await asyncio.to_thread(init_minio_bucket)
+        server = aio.server()
+        card_pb2_grpc.add_CardProviderServicer_to_server(CardProviderServicer(), server)
+        server.add_insecure_port('[::]:50051')
+        logger.info("Card Provider Service RUNNING on port 50051 (gRPC)")
+        await server.start()
+        await server.wait_for_termination()
 async def run_all():
     await asyncio.gather(
         serve(),

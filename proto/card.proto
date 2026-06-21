@@ -16,6 +16,7 @@ service CardProvider {
     rpc TopUpPrepaid (TopUpRequest) returns (TopUpResponse);
     rpc GetFullPan (GetCardRequest) returns (FullPanResponse);
     rpc ProcessIsoMessage (IsoRequest) returns (IsoResponse);
+    rpc StoreOfflineTransaction (OfflineTransactionRequest) returns (OfflineTransactionResponse);
 }
 
 // --- Karty ---
@@ -181,4 +182,17 @@ message IsoRequest {
 
 message IsoResponse {
     bytes payload = 1;
+}
+message OfflineTransactionRequest {
+    string card_number = 1;
+    double amount = 2;
+    string currency = 3;
+    string merchant_id = 4;
+    string merchant_name = 5;
+}
+
+message OfflineTransactionResponse {
+    bool success = 1;
+    string transaction_id = 2;
+    string status = 3;
 }

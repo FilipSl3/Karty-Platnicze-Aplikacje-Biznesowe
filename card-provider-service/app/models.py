@@ -100,3 +100,11 @@ class BankApiKey(Base):
     is_active = Column(Boolean, default=True)
     hmac_secret = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class TransactionStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    OFFLINE_PENDING = "OFFLINE_PENDING"
+    AUTHORIZED = "AUTHORIZED"
+    CAPTURED = "CAPTURED"
+    SETTLED = "SETTLED"
+    DECLINED = "DECLINED"
