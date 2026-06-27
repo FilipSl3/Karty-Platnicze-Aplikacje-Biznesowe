@@ -1120,7 +1120,7 @@ Nie. ISO 8583 jest używane wyłącznie wewnątrz modułu kart między Payment G
 | Zadanie | Kto | Status |
 |---|---|---|
 | Archiwizacja MinIO (WORM / Object Lock) | Filip | ⏳ W toku |
-| Płatności offline (floor limit) | Michał | ⏳ Planowane |
+| Płatności offline (floor limit) | Michał | ✅ Zrobione |
 
 ### Etap 3 – Ocena 5.0
 
